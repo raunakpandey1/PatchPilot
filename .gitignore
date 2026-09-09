@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+
+# Virtual environment
+.venv/
+
+# Cloned repositories (untrusted third-party code, large, regenerable)
+workspace/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local Poetry config (machine-specific paths)
+poetry.toml
+
+# macOS
+.DS_Store
