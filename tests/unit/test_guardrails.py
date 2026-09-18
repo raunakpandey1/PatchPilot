@@ -288,12 +288,16 @@ def test_preexisting_dangerous_code_is_not_flagged():
     assert Policy().evaluate_patch(patch) is Decision.ALLOW
 
 
+# Synthetic credentials only. These must never be derived from a real key by
+# substituting a few characters: a fixture built that way leaks most of the
+# original into version control, which is exactly what happened here once and
+# is why this comment exists.
 @pytest.mark.parametrize("secret", [
-    "ghp_abcdefghijklmnopqrstuvwxyz0123",
-    "AIzaSyCqK7xntIaSzE9k8vNqU7nj0wk205GM2Ow",
-    "AKIAIOSFODNN7EXAMPLE",
+    "ghp_EXAMPLEEXAMPLEEXAMPLEEXAMPLE0000",
+    "AIzaEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE",
+    "AKIAIOSFODNN7EXAMPLE",  # AWS's own documented example value
     "-----BEGIN RSA PRIVATE KEY-----",
-    'api_key = "supersecretvalue123"',
+    'api_key = "notarealsecretvalue00"',
 ])
 def test_a_patch_adding_a_credential_is_denied(secret):
     patch = patch_with(edit("src/config.py"), diff=f"--- a/src/config.py\n+++ b\n+{secret}\n")
@@ -337,8 +341,8 @@ def test_an_undetected_injection_still_cannot_read_ssh_keys():
 
 def test_an_undetected_injection_still_cannot_commit_a_credential():
     patch = patch_with(
-        edit("src/db.py", old="pass", new='token = "ghp_abcdefghijklmnopqrstuvwxyz0123"'),
-        diff='--- a/src/db.py\n+++ b\n+token = "ghp_abcdefghijklmnopqrstuvwxyz0123"\n',
+        edit("src/db.py", old="pass", new='token = "ghp_EXAMPLEEXAMPLEEXAMPLEEXAMPLE0000"'),
+        diff='--- a/src/db.py\n+++ b\n+token = "ghp_EXAMPLEEXAMPLEEXAMPLEEXAMPLE0000"\n',
     )
 
     assert Policy().evaluate_patch(patch) is Decision.DENY

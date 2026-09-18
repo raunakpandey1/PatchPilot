@@ -479,3 +479,62 @@ components, wrong in combination, failing quietly. Four of the eight failures in
 this log are integration bugs rather than logic bugs. That is not a coincidence
 — unit tests verify the piece you were thinking about, and the bugs live in the
 seams you were not.
+
+---
+
+## F-009 — A test fixture derived from a real API key
+
+| | |
+|---|---|
+| **Date** | 2026-09-18 |
+| **Phase** | 8 |
+| **Component** | `tests/unit/test_guardrails.py` |
+| **Severity** | 28 of 39 characters of a live credential published to a public repository |
+
+**Symptom.** None from the code's point of view — the test passed and the
+secret-detection policy worked correctly. Found by running a secret scan over the
+*pushed* tree as a post-push check:
+
+```
+origin/main:tests/unit/test_guardrails.py:293:  "AIzaSyCqK7xntIaSzE9k8vNqU7nj0wk205GM2Ow",
+```
+
+**Investigation.** That string is a test fixture for the policy rule that denies
+a patch adding a credential. It needs to *look* like a Google API key so the
+regex matches.
+
+It looked like one because it had been built from the real key by substituting
+the two hyphens with digits. Comparing them character by character:
+
+```
+real     AIzaSyCqK7xntIaSzE9k8vNqU7nj-wk2-5GM2Ow
+fixture  AIzaSyCqK7xntIaSzE9k8vNqU7nj0wk205GM2Ow
+                                     ^^^^ ^
+identical leading characters: 28 of 39
+```
+
+**Root cause.** Reaching for a value that was to hand instead of generating one.
+The fixture needed to match a regex, and any string of the right shape would
+have done — the real key carried no advantage whatsoever, only risk.
+
+**Fix.** Obviously synthetic values (`AIzaEXAMPLE...`, AWS's own documented
+`AKIAIOSFODNN7EXAMPLE`), plus a comment at the fixture list stating the rule and
+why it exists.
+
+**The real remediation is rotation.** A secret that reached a public repository
+is compromised regardless of subsequent commits: git history is permanent, forks
+and clones may exist, and the push has already been served. Removing it from the
+tip does not un-publish it. The key is being rotated.
+
+**Prevention.** Scan what was *pushed*, not what is staged — the two differ
+whenever history contains something the working tree no longer does. A
+pre-commit secret scanner would have caught this before the push.
+
+**Lesson.** The irony is the useful part: this is a project whose policy engine
+denies patches that add credentials, with tests proving it, and the credential
+got in through the *test for that rule*. A control does not cover the code that
+tests it.
+
+More generally — never build a fake credential by editing a real one. "Close
+enough to look real" and "close enough to leak the original" are the same
+property. Generate fixtures; do not derive them.
