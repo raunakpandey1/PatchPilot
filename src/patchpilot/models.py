@@ -465,10 +465,16 @@ class CheckOutcome(StrEnum):
 class TestFailure(BaseModel):
     """One failing test, parsed from the runner's output.
 
+    ``__test__ = False`` because pytest collects any class whose name starts
+    with ``Test``. It is safe on a Pydantic model: dunder names are not turned
+    into fields. Same reason as :class:`TestRunner`.
+
     Parsed rather than passed through as a blob because the debug loop needs the
     *specific* failure to repair. Handing a model 4,000 lines of pytest output
     wastes context and buries the one line that matters.
     """
+
+    __test__ = False
 
     model_config = ConfigDict(frozen=True)
 

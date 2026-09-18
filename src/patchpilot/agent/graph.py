@@ -45,6 +45,11 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from patchpilot.agent.deps import AgentDeps
+from patchpilot.agent.nodes.debugging import (
+    make_record_failure_node,
+    make_repair_patch_node,
+    route_after_validation,
+)
 from patchpilot.agent.nodes.fixing import (
     make_generate_patch_node,
     make_plan_fix_node,
@@ -102,6 +107,8 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
     graph.add_node("plan_fix", make_plan_fix_node(deps))  # type: ignore[call-overload]
     graph.add_node("generate_patch", make_generate_patch_node(deps))  # type: ignore[call-overload]
     graph.add_node("validate_patch", make_validate_patch_node(deps))  # type: ignore[call-overload]
+    graph.add_node("record_failure", make_record_failure_node(deps))  # type: ignore[call-overload]
+    graph.add_node("repair_patch", make_repair_patch_node(deps))  # type: ignore[call-overload]
 
     graph.add_edge(START, "analyze_repository")
 
@@ -122,7 +129,19 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
         )
 
     graph.add_edge("rank_issues", "select_issue")
-    graph.add_edge("validate_patch", END)
+    # The debug cycle. Validation always records its outcome first, then the
+    # routing function decides: stop, try again, or give up. Expressed as a
+    # conditional edge so "when does the agent stop trying?" is one small pure
+    # function rather than a loop condition tangled into a node.
+    graph.add_edge("validate_patch", "record_failure")
+    graph.add_conditional_edges(
+        "record_failure",
+        route_after_validation,
+        {"done": END, "repair": "repair_patch", "give_up": END},
+    )
+    graph.add_conditional_edges(
+        "repair_patch", continue_or_halt, {"continue": "validate_patch", "halt": END}
+    )
 
     return graph.compile(checkpointer=checkpointer)
 

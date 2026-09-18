@@ -108,6 +108,14 @@ class AgentState(TypedDict, total=False):
 
     debug_attempts: int
 
+    max_debug_attempts: int
+    """How many repair attempts are allowed. In state rather than deps so a
+    resumed run keeps the bound it started with, and so a test can set it to 1."""
+
+    failure_signatures: Annotated[list[str], operator.add]
+    """A fingerprint per failed attempt, used to detect a loop that is not making
+    progress. Accumulated, so 'this failed the same way twice' is answerable."""
+
     # --- filled by the validation node -------------------------------------
     validation: ValidationResult | None
     """What the sandbox found. `None` means it has not run; a result with
@@ -133,7 +141,9 @@ class AgentState(TypedDict, total=False):
     halt_reason: str
 
 
-def initial_state(run_id: str, repository_full_name: str) -> AgentState:
+def initial_state(
+    run_id: str, repository_full_name: str, *, max_debug_attempts: int = 3
+) -> AgentState:
     """A fresh state.
 
     Collections are initialised here rather than defaulted in the nodes so that
@@ -155,6 +165,8 @@ def initial_state(run_id: str, repository_full_name: str) -> AgentState:
         working_copy="",
         patch_errors=[],
         debug_attempts=0,
+        max_debug_attempts=max_debug_attempts,
+        failure_signatures=[],
         validation=None,
         usage=Usage(),
         visited=[],
@@ -186,6 +198,8 @@ def summarize(state: AgentState) -> str:
         parts.append(f"patch: {patch.summary_for_human()}")
     if validation := state.get("validation"):
         parts.append(validation.summary_for_human())
+    if attempts := state.get("debug_attempts"):
+        parts.append(f"repair attempts: {attempts}/{state.get('max_debug_attempts', 3)}")
     if state.get("halted"):
         parts.append(f"HALTED: {state.get('halt_reason', '')}")
     if errors := state.get("errors"):
