@@ -294,8 +294,10 @@ def test_preexisting_dangerous_code_is_not_flagged():
 # is why this comment exists.
 @pytest.mark.parametrize("secret", [
     "ghp_EXAMPLEEXAMPLEEXAMPLEEXAMPLE0000",
-    "AIzaEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE",
-    "AKIAIOSFODNN7EXAMPLE",  # AWS's own documented example value
+    "AIzaEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE",   # Google, legacy format
+    "AQ.EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE00",  # Google, current format
+    "AKIAIOSFODNN7EXAMPLE",                      # AWS's own documented example
+    "xoxb-0000000000-EXAMPLEEXAMPLE",            # Slack
     "-----BEGIN RSA PRIVATE KEY-----",
     'api_key = "notarealsecretvalue00"',
 ])
@@ -303,6 +305,34 @@ def test_a_patch_adding_a_credential_is_denied(secret):
     patch = patch_with(edit("src/config.py"), diff=f"--- a/src/config.py\n+++ b\n+{secret}\n")
 
     assert Policy().evaluate_patch(patch) is Decision.DENY, secret
+
+
+def test_an_unknown_credential_format_is_caught_by_shape():
+    """The patterns above are a denylist and denylists lag — Google shipped a
+    format this project did not know about, found by testing the detector
+    against a rotated key rather than by it firing. So the last pattern matches
+    on *shape*: a long opaque value assigned to a credential-shaped name.
+    """
+    patch = patch_with(
+        edit("src/config.py"),
+        diff='--- a/src/config.py\n+++ b\n+service_token = "zzqW8vTlNmKp2RxY7hBc4FdG"\n',
+    )
+
+    assert Policy().evaluate_patch(patch) is Decision.DENY
+
+
+@pytest.mark.parametrize("ordinary", [
+    "timeout = 30",
+    'name = "alice"',
+    "max_retries = 5",
+    'log_level = "INFO"',
+])
+def test_ordinary_assignments_are_not_flagged(ordinary):
+    """A detector that fires on normal code gets switched off, which is worse
+    than one that misses things."""
+    patch = patch_with(edit("src/config.py"), diff=f"--- a/src/config.py\n+++ b\n+{ordinary}\n")
+
+    assert Policy().evaluate_patch(patch) is Decision.ALLOW, ordinary
 
 
 def test_a_credential_only_in_removed_lines_is_not_flagged():

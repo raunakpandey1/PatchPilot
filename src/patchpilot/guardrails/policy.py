@@ -166,12 +166,36 @@ DANGEROUS_CODE = (
 )
 
 # Anything shaped like a credential appearing in a diff.
+#
+# **This is a denylist, and denylists lag.** Google issued a new key format
+# (`AQ.` followed by base64-ish characters) that the original patterns here did
+# not match — discovered by testing this detector against a freshly rotated key
+# rather than by it firing. A provider can introduce a format tomorrow and this
+# list will not know about it.
+#
+# So the last pattern is deliberately *shape-based* rather than
+# vendor-specific: a long opaque value assigned to something named like a
+# credential. It catches formats nobody has enumerated, at the cost of some
+# false positives — which is the right direction for this trade, because the
+# consequence of a miss is a published secret and the consequence of a false
+# positive is a human looking at a diff.
 SECRET_PATTERNS = (
-    re.compile(r"\b(?:sk|pk|ghp|gho|github_pat)_[A-Za-z0-9_]{16,}"),
-    re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),
-    re.compile(r"\bAKIA[0-9A-Z]{12,}"),
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(r"(?i)\b(?:api[_-]?key|secret|password|token)\s*[:=]\s*['\"][^'\"]{12,}"),
+    # Vendor-specific prefixes: precise, and only as current as this list.
+    re.compile(r"\b(?:sk|pk|ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{16,}"),
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),          # Google, legacy format
+    re.compile(r"\bAQ\.[A-Za-z0-9_\-]{30,}"),           # Google, current format
+    re.compile(r"\bAKIA[0-9A-Z]{12,}"),                 # AWS access key id
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),      # Slack
+    re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
+    # Shape-based: a long opaque value assigned to a credential-shaped name.
+    # Format-agnostic on purpose, because the patterns above will always lag.
+    # `\w*` on both sides so `service_token` and `my_api_key` match too — an
+    # underscore is a word character, so a leading \b would only match names
+    # that *start* with the keyword.
+    re.compile(
+        r"(?i)\b\w*(?:api[_-]?key|secret|password|passwd|token|credential|auth)\w*"
+        r"\s*[:=]\s*['\"][A-Za-z0-9_\-./+]{16,}['\"]"
+    ),
 )
 
 
