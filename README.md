@@ -63,7 +63,7 @@ Start at [docs/README.md](docs/README.md).
 | [concepts/](docs/concepts/) | 26 explainers from zero — what an LLM is, what an agent is, embeddings, hybrid search, chunking code, sandboxing, prompt injection, guardrails, MCP, evaluation |
 | [journey/](docs/journey/) | the build diary, one entry per phase group |
 | [adr/](docs/adr/) | 20 decision records, each with the alternatives and the interview questions it raises |
-| [interview/](docs/interview/) | question bank and 11 STAR stories from what actually happened |
+| [interview/](docs/interview/) | a six-level [mock interview](docs/interview/mock-interview.md), a question bank, and 11 STAR stories from what actually happened |
 | [failures.md](docs/failures.md) | 8 real bugs, with the debugging process |
 | [metrics.md](docs/metrics.md) | every measured number, with the command |
 

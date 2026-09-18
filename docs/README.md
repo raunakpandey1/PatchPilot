@@ -12,8 +12,11 @@ defined before it is used.
    why, what broke, and how it was fixed.
 3. **[adr/](adr/)** — Architecture Decision Records. Every real decision, the
    options that were actually considered, and why one won.
-4. **[interview/](interview/)** — questions and answers, and STAR stories built
-   from what really happened while building this.
+4. **[interview/](interview/)** — [the mock interview](interview/mock-interview.md)
+   (six levels, from "explain it in 60 seconds" to "tell me about a mistake"),
+   a [question bank](interview/questions.md) by topic, and a
+   [story bank](interview/story-bank.md) of STAR stories built from what really
+   happened here.
 5. **[failures.md](failures.md)** — the failure log. Real bugs only.
 6. **[metrics.md](metrics.md)** — every measured number, with the command that
    produced it.
