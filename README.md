@@ -5,7 +5,7 @@ finds an actionable issue, investigates it against the codebase, proposes a
 patch, validates that patch in a sandbox, and — only with human approval —
 opens a pull request.
 
-**Status:** Phase 1 of 13 complete. Not yet an agent; see [the roadmap](#roadmap).
+**Status:** Phase 2 of 13 complete. It picks an issue; it cannot yet fix one. See [the roadmap](#roadmap).
 
 ```
 GitHub repo ──► analyse ──► rank issues ──► retrieve code ──► root cause
@@ -33,7 +33,7 @@ LangGraph.** Start at [docs/README.md](docs/README.md).
 
 | | |
 |---|---|
-| [concepts/](docs/concepts/) | the ideas, from zero — REST and rate limits, the git object model, untrusted input, testing against third-party APIs |
+| [concepts/](docs/concepts/) | the ideas, from zero — what an LLM is, what an agent is, LangGraph state and reducers, checkpointing, structured output, RAG, rate limits, untrusted input |
 | [journey/](docs/journey/) | the build diary, one file per phase |
 | [adr/](docs/adr/) | every real decision, the alternatives, and the interview questions it raises |
 | [interview/](docs/interview/) | question bank and STAR stories from what actually happened |
@@ -59,6 +59,9 @@ poetry run python scripts/benchmark_clone.py simonw/sqlite-utils
 
 # Measure what conditional requests save
 poetry run python scripts/benchmark_github.py simonw/sqlite-utils
+
+# Run the agent: clone, analyse, rank 77 issues, pick one — with reasons
+poetry run python scripts/run_graph.py simonw/sqlite-utils
 ```
 
 A CLI arrives in Phase 12.
@@ -75,8 +78,15 @@ A CLI arrives in Phase 12.
 - **Repository analysis** — languages, package manager, test command, file
   classification, entirely deterministic.
   [`analysis/repository.py`](src/patchpilot/analysis/repository.py)
+- **The agent graph** — LangGraph with typed state, halt-with-a-reason routing,
+  and SQLite checkpoints that let a run resume in a different process.
+  [`agent/graph.py`](src/patchpilot/agent/graph.py)
+- **Issue ranking** — six weighted factors plus hard blockers, fully
+  explainable, zero model tokens. [`agent/ranking.py`](src/patchpilot/agent/ranking.py)
+- **LLM abstraction** — a two-method protocol with Gemini and scripted
+  implementations, so 121 tests run offline and free. [`llm/`](src/patchpilot/llm/)
 
-## Two findings so far
+## Three findings so far
 
 **A shallow clone reads one commit of history.** Blobless reads all of it at
 ~45% of a full clone's size. The fastest option was the one that could not do
@@ -86,13 +96,18 @@ the job — [ADR-004](docs/adr/ADR-004-blobless-clone.md).
 against 2 without. Finding that out also uncovered a bug where a warm cache
 silently returned 21% fewer issues — [failures.md F-002](docs/failures.md).
 
+**Of 77 open issues on the target repo, 10 are worth an agent attempting** —
+ranked in under 3 ms for zero model tokens, each with a printable derivation.
+Determinism here is what makes later retrieval improvements measurable at all —
+[ADR-010](docs/adr/ADR-010-deterministic-ranking.md).
+
 ## Roadmap
 
 | Phase | | Status |
 |---|---|---|
 | 0 | Foundations | ✅ |
 | 1 | GitHub & repository analysis | ✅ |
-| 2 | LangGraph + LLM provider abstraction | |
+| 2 | LangGraph + LLM provider abstraction | ✅ |
 | 3 | Repository RAG (hybrid retrieval, Qdrant) | |
 | 4 | Issue investigation & root cause | |
 | 5 | Fix planning & code generation | |
@@ -113,9 +128,11 @@ src/patchpilot/      package (src/ layout — imports resolve through the instal
 ├── errors.py        typed failures
 ├── config.py        one validated settings inventory
 ├── tools/           adapters: github, git, workspace, http_cache
-└── analysis/        deterministic repository characterisation
+├── analysis/        deterministic repository characterisation
+├── llm/             provider protocol + gemini + scripted fake
+└── agent/           state, reducers, ranking, nodes, graph
 
-tests/unit/          69 tests, offline, ~2s
+tests/unit/          121 tests, offline, ~7s
 tests/integration/   6 tests, real GitHub, marked `integration`
 docs/                concepts, journey, ADRs, interview prep
 scripts/             the benchmarks behind docs/metrics.md

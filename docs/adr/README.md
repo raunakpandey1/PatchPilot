@@ -18,3 +18,7 @@ Each ADR ends with two sections that exist for interview preparation:
 | [004](ADR-004-blobless-clone.md) | Blobless clone as the default strategy | 1 |
 | [005](ADR-005-rest-etag-over-graphql.md) | REST + ETag caching instead of GraphQL | 1 |
 | [006](ADR-006-deterministic-detection.md) | Deterministic repository analysis, no LLM | 1 |
+| [007](ADR-007-langgraph.md) | LangGraph for orchestration | 2 |
+| [008](ADR-008-llm-provider-abstraction.md) | LLM provider behind a Protocol | 2 |
+| [009](ADR-009-sqlite-checkpointer.md) | SQLite checkpoints, not Postgres | 2 |
+| [010](ADR-010-deterministic-ranking.md) | Deterministic issue ranking | 2 |

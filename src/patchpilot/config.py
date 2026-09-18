@@ -48,12 +48,28 @@ class Settings(BaseSettings):
     max_repo_size_mb: int = Field(default=500, gt=0)
     http_timeout_s: float = Field(default=30.0, gt=0)
 
+    # --- Language model ----------------------------------------------------
+    # Which provider to construct. The rest of the system only ever sees the
+    # LLMProvider protocol, so this is the only place the choice appears.
+    llm_provider: Literal["gemini", "fake"] = "gemini"
+    gemini_api_key: SecretStr | None = None
+    llm_model: str = "gemini-2.0-flash"
+    llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    llm_max_output_tokens: int = Field(default=4096, gt=0)
+    llm_max_attempts: int = Field(default=4, ge=1)
+
+    # --- Agent -------------------------------------------------------------
+    # Where LangGraph checkpoints live. Deleting this file loses the ability to
+    # resume paused runs; it holds no other state.
+    checkpoint_db: Path = Path("workspace/checkpoints.sqlite")
+    max_debug_iterations: int = Field(default=5, ge=1, le=20)
+
     # --- Observability -----------------------------------------------------
     log_level: LogLevel = "INFO"
 
-    @field_validator("workspace_dir")
+    @field_validator("workspace_dir", "checkpoint_db")
     @classmethod
-    def _resolve_workspace(cls, value: Path) -> Path:
+    def _resolve_under_project(cls, value: Path) -> Path:
         """Make relative paths absolute against the project root.
 
         Without this, the workspace location would depend on the current

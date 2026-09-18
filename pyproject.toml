@@ -9,6 +9,10 @@ dependencies = [
     "structlog (>=24.4,<26.0)",
     "httpx (>=0.28,<0.29)",
     "tenacity (>=9.0,<10.0)",
+    "langgraph (>=0.6,<0.7)",
+    "langgraph-checkpoint-sqlite (>=2.0,<3.0)",
+    "google-genai (>=1.0,<2.0)",
+    "langsmith (>=0.3,<0.4)",
 ]
 
 [tool.poetry]
@@ -27,6 +31,11 @@ markers = [
     "integration: touches the network, Docker, or other real services (deselect with '-m \"not integration\"')",
 ]
 addopts = "-q --strict-markers"
+filterwarnings = [
+    # Upstream LangGraph deprecation we do not control and cannot act on.
+    "ignore:The default value of `allowed_objects`:DeprecationWarning",
+    "ignore::langchain_core._api.beta_decorator.LangChainBetaWarning",
+]
 
 [build-system]
 requires = ["poetry-core>=2.0.0"]

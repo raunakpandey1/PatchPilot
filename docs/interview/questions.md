@@ -6,8 +6,8 @@ topic, with answers grounded in code that exists in this repository.
 Answers are written the way you would say them out loud: a claim, a reason, and
 where possible a number.
 
-> Sections are added as each phase lands. Agents, RAG, LangGraph, sandboxing,
-> guardrails and evaluation arrive in Phases 2–11.
+> Sections are added as each phase lands. RAG, sandboxing, guardrails and
+> evaluation arrive in Phases 3–11.
 
 ---
 
@@ -211,3 +211,152 @@ pagination, both passing, while the interaction between them lost a fifth of the
 data. When an optimisation is supposed to preserve behaviour, the test that
 matters is the one asserting optimised and unoptimised results are identical —
 and I only got there by measuring on real data.
+
+
+---
+
+## Agents and orchestration
+
+**What is an agent, as opposed to a single model call?**
+
+A loop where a model decides an action, real code executes it, and the actual
+result feeds back into the next decision. The defining feature is feedback from
+a real environment. In PatchPilot the environment is a git repository and a test
+runner, so the agent finds out whether its patch works rather than predicting
+it. A single call would produce a plausible patch having never run anything.
+
+**How much autonomy does yours have, and why?**
+
+Deliberately little. The sequence of steps is fixed in the graph; the model is
+used at specific points for specific judgements, each returning a declared
+schema. Three reasons. It is auditable — a security review can be told exactly
+which node is capable of touching git, which is unanswerable if routing emerges
+from a conversation. It is debuggable, because a failed run can be compared
+against a known path. And it is cheaper, because deciding what to do next is
+itself a model call I am not making. The cost is that it cannot improvise a step
+I did not anticipate, which for something editing other people's repositories is
+the trade I want.
+
+**Why LangGraph rather than a `while` loop?**
+
+Three properties of this project. The debug loop is a bounded cycle, and as a
+conditional edge the routing decision stays a small pure function you can test
+with a dictionary, rather than tangling with the work inside a loop body. Human
+approval spans process boundaries — the person answers hours later, possibly
+from a second CLI run — so the whole state must survive to disk and resume,
+which is a durable execution engine if you write it yourself. And re-running is
+expensive: a crash at the sandbox step would repeat every model call, and on a
+free tier that is quota I cannot get back. Checkpointing is a cost control here,
+not an aesthetic.
+
+**What does LangGraph cost you?**
+
+An extra layer in every stack trace, an API that moves between versions, typing
+friction that cost four documented ignores, and a state migration problem —
+change the schema and old checkpoints no longer match, with nothing to migrate
+them. In development I delete the checkpoint file; in production that is
+genuinely unsolved.
+
+**What is state, and why can it not be local variables?**
+
+It is everything the run knows, as one serialisable value. Local variables die
+when the function returns, and three things here require them to survive:
+pausing for a human and resuming in a different process, recovering from a crash
+without repeating expensive work, and looping with accumulated knowledge.
+
+**What is a reducer and what breaks without one?**
+
+A function that merges a node's output into existing state rather than replacing
+it. By default, a node returning a key overwrites it — so if two nodes each
+report an error, you keep only the second. Token usage is the clearest case:
+without an accumulating reducer, the last node's count replaces all the others
+and the cost of a run is unknowable. The rule is that if the answer to "what if
+two nodes write this?" is "keep both", it needs a reducer.
+
+**Why is the GitHub client not in the state?**
+
+State is serialised to the checkpoint database, and an open socket does not
+survive that. Live objects are passed in when the graph is built and closed over
+by the nodes. A useful side effect: tests substitute an entire world — scripted
+model, mock HTTP transport, temporary workspace — and the whole graph runs
+offline.
+
+**How does an agent pause for approval and resume later?**
+
+The state is written to a checkpoint store after every step, keyed by a
+`thread_id`. The run stops and the process can exit. When approval arrives, a
+new invocation with the same `thread_id` loads that state and continues from the
+next step. I verified it the strongest way available — one graph object runs the
+agent, and a *different* graph object reads the completed state back out. If
+anything were held in memory by the running graph, that test would fail.
+
+**How would you scale the checkpointer?**
+
+SQLite serialises writers, so several concurrent agents against one file will
+contend. The switch point is concurrency. `PostgresSaver` implements the same
+interface, so it is a change in one constructor rather than a rewrite — which is
+most of why I did not hand-roll the storage.
+
+---
+
+## Working with models
+
+**Why abstract the LLM provider? Is that not premature?**
+
+It would be with one implementation; there are two in use today. The test suite
+needs a model that is free, deterministic and offline, and no real provider is
+any of those — so 121 tests run against a scripted implementation satisfying the
+same protocol. The provider swap is a secondary benefit. My test for premature
+abstraction is whether the second implementation exists now, not whether I can
+imagine needing one.
+
+**What actually breaks when you swap models?**
+
+Prompts and comparability. The plumbing is a config change, but a prompt tuned
+for one model is not automatically good on another, and benchmark numbers do not
+transfer. That is why the provider name is recorded alongside every
+measurement — a metric without the model that produced it is meaningless.
+
+**How do you get reliable structured data out of a model?**
+
+Declare a schema and use the provider's constrained-generation support, so the
+model can only emit tokens that fit — rather than asking for JSON in the prompt
+and parsing the reply. Then validate anyway, because constrained output can
+still be truncated by the token limit. When validation fails I distinguish the
+causes, because the fixes are opposite: truncation means raise
+`max_output_tokens`, a genuine mismatch means the prompt is under-specified and
+retrying identical input will fail identically.
+
+**Your schema validated. Is the answer right?**
+
+No — it has the right shape. `line: 40` is a valid integer whether or not the
+bug is on line 40. Shape is the schema's job; correctness is the test suite's.
+Conflating them is how you get a pipeline that is confidently wrong in a
+well-formed way.
+
+**Why rank issues with arithmetic instead of a model?**
+
+Cost, stability, explainability — and stability is the one that decided it. An
+LLM ranker orders differently every run, so when I improve retrieval in Phase 3
+the agent would work on different issues and the benchmark comparison would be
+meaningless. Determinism upstream is a precondition for measuring anything
+downstream. It also ranks 77 issues in under 3 milliseconds for zero tokens, and
+prints the factor table that answers "why was this skipped".
+
+**Your ranking weights are made up. Is that not the same problem?**
+
+They are guesses and I say so. The difference is that they are stable guesses I
+can test: Phase 11 measures how well the `attempt` verdict predicts real fix
+success, and tuning is a one-line change with a measurable effect. I already
+have a hypothesis from real data — two issues scored `attempt` at over three
+years stale, so the staleness weight is probably too low. A model's implicit
+weights can be neither inspected nor tuned.
+
+**A type checker rejected your working code. What did you do?**
+
+Reduced it to the smallest file containing none of my own code. A
+directly-defined node function passed; the same function returned from a factory
+failed. That located it in LangGraph's overload inference rather than in my
+types, so the four `type: ignore` comments are a documented decision with the
+reduction recorded beside them. Silencing a checker without that evidence is how
+a real bug ends up hidden behind a comment.

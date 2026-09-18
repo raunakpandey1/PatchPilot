@@ -110,3 +110,67 @@ Listed so the gaps are explicit rather than quietly missing:
 - First-attempt fix rate, iterations to success (Phase 7)
 - Tokens, latency and cost per run (Phase 10)
 - Unsafe-action block rate (Phase 8)
+
+---
+
+## Phase 2 — The agent graph on a real repository
+
+**Command:** `poetry run python scripts/run_graph.py simonw/sqlite-utils`
+**When:** 2026-09-18 · authenticated, warm clone
+
+| stage | result |
+|---|---|
+| repository analysed | 107 files, pytest, setuptools, testable ✅ |
+| clone | 2.5 MB blobless, 1.25 s |
+| issues fetched | 77 open (3 HTTP requests) |
+| issues ranked | 77 in < 3 ms |
+| verdicts | **10 attempt · 37 maybe · 30 skip** |
+| selected | #841 at score **0.91** |
+| nodes visited | analyze_repository → discover_issues → rank_issues → select_issue |
+| LLM tokens used | **0** |
+
+Zero tokens is the notable number. Everything in this phase — analysis,
+discovery, ranking, selection — is deterministic. The model is wired in and
+unused until Phase 4.
+
+### Ranking behaviour on real data
+
+Of 77 open issues, **13% cleared the `attempt` threshold**. The top result:
+
+```
+#841 — rows_where() and delete_where() fail to throw errors against
+       non-existent tables
+  verdict: ATTEMPT   score: 0.91
+    + reproducibility   3.00  2 reproduction signals (traceback/code/steps)
+    + labels            2.00  labelled bug
+    + scope             1.20  focused description
+    + discussion        0.60  1 comments — some confirmation
+    + clarity           0.50  specific title
+    + staleness         0.50  active (35 days ago)
+```
+
+**An observation, recorded as a hypothesis rather than acted on:** issues #399
+and #430 scored `attempt` despite being **1,220 and 1,556 days** without
+activity. The staleness weight looks too low relative to reproducibility. That
+is a guess. Phase 11 measures how well the `attempt` verdict predicts actual fix
+success, and the weights get tuned against that — which is possible only because
+the ranker is deterministic ([ADR-010](adr/ADR-010-deterministic-ranking.md)).
+
+---
+
+## Phase 2 — Test suite
+
+**Command:** `poetry run pytest -m "not integration"`
+
+| metric | Phase 1 | Phase 2 |
+|---|---:|---:|
+| unit tests | 69 | **121** |
+| suite runtime | ~2 s | **~7.4 s** |
+| network calls in unit suite | 0 | **0** |
+| LLM calls in unit suite | — | **0** |
+| `mypy --strict` errors | 0 | 0 |
+| `ruff check` errors | 0 | 0 |
+
+The unit suite exercises the full agent graph — cloning, ranking, checkpointing,
+resume — with no network, no API key and no model. That is what the fake
+provider and the injectable HTTP transport are for.

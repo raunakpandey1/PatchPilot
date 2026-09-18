@@ -28,6 +28,12 @@ def setup_logging(level: LogLevel = "INFO", *, json_output: bool = False) -> Non
     """
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
 
+    # Third-party libraries that log one line per HTTP request at INFO. Ours are
+    # the events worth reading; theirs are noise that buries them. Raised to
+    # WARNING rather than silenced, so real problems still surface.
+    for noisy in ("httpx", "httpcore", "google_genai", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     renderer = (
         structlog.processors.JSONRenderer()
         if json_output

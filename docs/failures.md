@@ -142,3 +142,80 @@ default refuses a local clone.
 **Lesson.** A security control that never inconveniences anyone is usually not
 doing anything. When one blocks you, the question is "is this use legitimate,
 and can I make it explicit?" — not "how do I turn it off?"
+
+---
+
+## F-004 — `mypy --strict` rejected valid LangGraph code
+
+| | |
+|---|---|
+| **Date** | 2026-09-18 |
+| **Phase** | 2 |
+| **Component** | `agent/graph.py` |
+| **Severity** | None at runtime — a typing-only failure |
+
+**Symptom.** Four `mypy` errors, one per node:
+
+```
+error: No overload variant of "add_node" of "StateGraph" matches argument
+types "str", "Callable[[AgentState], AgentState]"  [call-overload]
+```
+
+The tests passed. The graph ran correctly against the real repository. Only the
+type checker objected.
+
+**Investigation.** The tempting move is to add `# type: ignore` and continue.
+That is fine *if* you know whose bug it is — and at this point I did not. A
+silenced error hiding a real mistake is worse than the error.
+
+So: reduce it to the smallest thing that reproduces, with none of my own code in
+it. Six lines:
+
+```python
+class S(TypedDict, total=False):
+    x: int
+
+def node_a(state: S) -> S:        # directly-defined function
+    return S(x=1)
+
+StateGraph(S).add_node("a", node_a)          # ✅ mypy --strict: Success
+```
+
+Passes. Now the only change that matters — the node comes from a factory:
+
+```python
+NodeFn = Callable[[S], S]
+
+def make() -> NodeFn:
+    def node(state: S) -> S:
+        return S(x=1)
+    return node
+
+StateGraph(S).add_node("a", make())          # ❌ same error
+```
+
+Fails. Same types, same function body; the only difference is whether mypy sees
+a `def` or a value whose type is a `Callable` alias.
+
+**Root cause.** LangGraph's `add_node` overloads infer their node type parameter
+from a directly-defined function. Mypy cannot infer it through a `Callable[...]`
+alias, which is what a node *factory* returns. Our nodes come from factories
+because they close over dependencies — see
+[deps.py](../src/patchpilot/agent/deps.py) — so every one of them hits this.
+
+**Fix.** Four `# type: ignore[call-overload]` comments, each with the reduction
+above recorded in the code next to them, so a future reader knows it was
+diagnosed rather than silenced.
+
+**Verification.** `mypy --strict` clean across 24 files; 121 tests pass; the
+graph runs correctly against the real API.
+
+**Prevention.** Not preventable — it is upstream. What is repeatable is the
+method: **before silencing a type error, reduce it to a file containing none of
+your own code.** If the minimal case still fails, it is theirs. If it passes, it
+is yours, and you just found it.
+
+**Lesson.** `# type: ignore` is a claim that you know better than the checker.
+Making that claim without evidence is how a real bug gets hidden behind a
+comment. Five minutes of reduction turned a guess into a fact — and into a
+documented one.

@@ -155,6 +155,90 @@ lookup. "Is this issue worth attempting" is judgement.
 
 ---
 
+## S-005 — Proving whose bug it was before silencing it
+
+*Answers:* "tell me about a time you disagreed with a tool", "tell me how you
+debug something outside your own code", "tell me about a time you resisted a
+quick fix".
+
+**Situation.** After wiring up the agent graph, `mypy --strict` reported four
+errors — no matching overload for LangGraph's `add_node`. The tests passed and
+the graph ran correctly against the real repository. Only the type checker
+objected.
+
+**Task.** Decide whether this was my mistake or the library's. The quick move
+was `# type: ignore` on four lines, and it would have worked. But a silenced
+error hiding a real bug is worse than the error, and I did not yet know which
+this was.
+
+**Action.** I reduced it to the smallest file that reproduced it, containing
+none of my own code — a six-line TypedDict and one node function. A
+directly-defined `def node(state: S) -> S` passed. The identical function
+returned from a factory typed `Callable[[S], S]` failed with the same error.
+Same types, same body; the only difference was whether mypy saw a `def` or a
+value.
+
+That located it precisely: LangGraph's overloads infer their node type parameter
+from a directly-defined function and cannot infer it through a `Callable` alias.
+My nodes come from factories because they close over dependencies, so every one
+of them hit it.
+
+**Result.** Four `type: ignore[call-overload]` comments — with the reduction
+recorded in the code beside them, so a future reader knows it was diagnosed
+rather than waved away. `mypy --strict` clean across 24 files, 121 tests
+passing.
+
+**What I took from it.** `# type: ignore` is a claim that you know better than
+the checker, and making it without evidence is how a real bug hides behind a
+comment. The rule I now use: reduce it to a file with none of your own code in
+it. If the minimal case still fails, it is theirs. If it passes, it is yours,
+and you have just found it. It took five minutes and turned a guess into a
+documented fact.
+
+---
+
+## S-006 — Choosing determinism upstream so I could measure downstream
+
+*Answers:* "tell me about a design decision that paid off later", "tell me about
+a time you thought about testability up front", "tell me about resisting the
+obvious AI solution".
+
+**Situation.** PatchPilot has to pick which of a repository's open issues to
+attempt. On the real target, that is 77 open issues, most of them unsuitable —
+already assigned, open-ended feature requests, or long design arguments.
+
+**Task.** Build the selection step. The obvious approach in an AI project is to
+give the model the issues and ask it to rank them.
+
+**Action.** I used deterministic scoring instead — six weighted factors over
+observable properties, with hard blockers that short-circuit before any scoring.
+Cost was part of the reason: 200 issues means 200 calls or one very long prompt,
+every run, on a free tier.
+
+But the deciding reason was measurement. An LLM ranker returns a different
+ordering on every run. So when I improve retrieval in Phase 3 and the benchmark
+moves, I would have no way to tell whether retrieval got better or the ranker
+simply chose different issues that day. **Determinism upstream is a
+precondition for measuring anything downstream.**
+
+**Result.** 77 issues ranked in under 3 milliseconds using zero model tokens,
+into 10 attempt / 37 maybe / 30 skip, each with a printable derivation. Running
+it twice gives byte-identical output, which is asserted by a test.
+
+It also immediately produced a finding I would not otherwise have seen: two
+issues scored "attempt" despite being over three years without activity, which
+suggests my staleness weight is too low. I recorded that as a hypothesis rather
+than tuning it by intuition, because Phase 11 can measure how well the verdict
+predicts actual fix success.
+
+**What I took from it.** The honest weakness is that my weights are guesses. But
+they are *stable* guesses I can test and change one line at a time, and a
+model's implicit weights are neither inspectable nor tunable. When something
+sits upstream of everything you plan to measure, its determinism is worth more
+than its sophistication.
+
+---
+
 ## Stories not yet written
 
 Placeholders, so the gaps stay honest. These will be filled only if the
