@@ -26,3 +26,9 @@ Each ADR ends with two sections that exist for interview preparation:
 | [012](ADR-012-hybrid-retrieval.md) | Hybrid retrieval with rank fusion | 3 |
 | [013](ADR-013-code-aware-chunking.md) | AST chunking, not fixed-size | 3 |
 | [014](ADR-014-vector-db-is-not-the-database.md) | The vector DB is not the primary database | 3 |
+| [015](ADR-015-exact-text-edits.md) | Exact-text edits, not model-written diffs | 5 |
+| [016](ADR-016-docker-sandbox.md) | Docker sandbox; install and run as separate trust levels | 6 |
+| [017](ADR-017-bounded-debug-loop.md) | Bound the debug loop three ways | 7 |
+| [018](ADR-018-human-in-the-loop.md) | Human approval via interrupt, with no default | 9 |
+| [019](ADR-019-fallback-and-cache.md) | Model fallback chain and response cache | 4 |
+| [020](ADR-020-read-only-mcp.md) | MCP exposes read-only capabilities only | 12 |

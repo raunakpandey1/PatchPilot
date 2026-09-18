@@ -492,3 +492,60 @@ tests from public repositories that is an accepted risk, stated rather than
 glossed: the realistic threats are accidental damage and opportunistic
 exfiltration, both of which these controls stop. A VM or gVisor would be the
 honest answer to a targeted attacker.
+
+---
+
+## Phases 6–12 — What is measured, and what is not
+
+### Measured
+
+| metric | value | source |
+|---|---|---|
+| sandbox integration tests | **6/6 passing** | live Docker |
+| — network egress blocked | verified | a test opens a socket and must fail |
+| — host filesystem invisible | verified | `/Users` must not exist inside |
+| — non-root execution | verified | `os.getuid() != 0` |
+| — timeout enforced | verified | 600 s sleep against a 10 s limit |
+| image build (small repo) | ~16 s | |
+| test execution in container | ~0.7 s | |
+| unit tests | **467** | offline, ~17 s |
+| integration tests | 12 | GitHub + Docker |
+| `mypy --strict` / `ruff` | 0 errors | |
+| CLI issue ranking | 77 issues → 10/37/30 | zero model calls |
+
+### Costs observed in live runs
+
+| | |
+|---|---|
+| root cause (1 call) | 2,731 tokens, 8.2 s |
+| plan + patch (2 calls) | 3,894 tokens |
+| full investigation→patch | **6,625 tokens, 3 calls** |
+| repeat run (cached) | **0 tokens, 0 calls** |
+| fallback events in one run | 5 (three 503s, one 429, one 503) |
+
+### Not measured — stated rather than estimated
+
+The end-to-end benchmark harness exists, is tested (20 tests), and **has not been
+run**. Producing real numbers needs free-tier quota that is currently exhausted.
+
+So the following are **unknown**, and no estimate is offered:
+
+- issue-to-patch rate
+- first-attempt fix rate
+- eventual fix rate
+- regression rate
+- median tokens and cost per fix
+- policy block rate on real patches
+
+One correct patch on `sqlite-utils` #841 is a single data point, not a success
+rate. Publishing a rate from it would be exactly the kind of number this
+project's failure log exists to prevent.
+
+**To produce them:**
+
+```bash
+poetry run python -m patchpilot.evaluation.run_benchmark --repo simonw/sqlite-utils --limit 20
+```
+
+Estimated cost at ~7,000 tokens per issue: roughly 140,000 tokens for 20 issues,
+plus repair attempts. Well inside a day's free-tier allowance on a fresh quota.

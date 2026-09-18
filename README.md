@@ -1,159 +1,139 @@
 # PatchPilot
 
 An autonomous open-source contribution agent. Given a GitHub repository, it
-finds an actionable issue, investigates it against the codebase, proposes a
-patch, validates that patch in a sandbox, and — only with human approval —
-opens a pull request.
+ranks the open issues, retrieves the relevant code, diagnoses a root cause,
+writes a minimal patch, runs the repository's own tests against it in a sandbox,
+repairs it when they fail — and stops for a human before anything reaches the
+repository.
 
-**Status:** Phase 3 of 13 complete. It picks an issue and finds the relevant code; it cannot yet fix anything. See [the roadmap](#roadmap).
+**Status:** Phases 0–12 complete. The pipeline runs end to end on real issues.
+The end-to-end benchmark has not been run — see [what is not
+measured](#what-is-not-measured).
 
 ```
-GitHub repo ──► analyse ──► rank issues ──► retrieve code ──► root cause
-                                                                   │
-        PR ◄── human approval ◄── review ◄── test in sandbox ◄── patch
-                                                  │                │
-                                                  └── debug loop ──┘
+ issue ──► rank ──► retrieve ──► diagnose ──► plan ──► patch
+                                                         │
+                     ┌───────────────────────────────────┤
+                     │                                   ▼
+                     │                          validate in Docker
+                     │                                   │
+                     └──── repair ◄── failed ───────────┤
+                                                    passed
+                                                         ▼
+                                            policy review ──► human approval
 ```
 
 ## Principles
 
 1. **The repository is untrusted input** — as code (never runs on the host) and
    as text (never treated as instructions).
-2. **Nothing consequential without a human.** Branch, commit and PR creation are
-   gated on explicit approval.
+2. **Nothing consequential without a human.** A policy denial never even reaches
+   the approval screen.
 3. **Deterministic where possible.** The model is for judgement; code is for
    looking up facts that are already written down.
-4. **Measured, not asserted.** Every claim about how well it works comes from a
-   benchmark run, with the command recorded.
+4. **Measured, not asserted.** Every number comes from a command you can re-run.
+   Where something has not been measured, it says so.
+
+## Quick start
+
+Requires Python 3.13, [Poetry](https://python-poetry.org/), Docker, and a free
+[Google AI Studio key](https://aistudio.google.com/apikey).
+
+```bash
+poetry install
+cp .env.example .env          # add PATCHPILOT_GEMINI_API_KEY
+poetry run patchpilot doctor  # checks everything needed for a full run
+```
+
+```bash
+patchpilot issues simonw/sqlite-utils      # rank open issues — no model calls
+patchpilot explain simonw/sqlite-utils 841 # why that issue scored what it did
+patchpilot index  simonw/sqlite-utils      # build the retrieval index, locally
+patchpilot run    simonw/sqlite-utils      # diagnose → patch → test → wait
+patchpilot approve run_abc123 approve      # resume, possibly hours later
+```
 
 ## Documentation
 
-**[docs/](docs/) is written for someone who knows nothing about agents, RAG or
-LangGraph.** Start at [docs/README.md](docs/README.md).
+**[docs/](docs/) assumes no prior knowledge of agents, RAG or LangGraph.**
+Start at [docs/README.md](docs/README.md).
 
 | | |
 |---|---|
-| [concepts/](docs/concepts/) | the ideas, from zero — what an LLM is, what an agent is, LangGraph state and reducers, checkpointing, structured output, RAG, rate limits, untrusted input |
-| [journey/](docs/journey/) | the build diary, one file per phase |
-| [adr/](docs/adr/) | every real decision, the alternatives, and the interview questions it raises |
-| [interview/](docs/interview/) | question bank and STAR stories from what actually happened |
-| [failures.md](docs/failures.md) | real bugs, real root causes |
+| [concepts/](docs/concepts/) | 26 explainers from zero — what an LLM is, what an agent is, embeddings, hybrid search, chunking code, sandboxing, prompt injection, guardrails, MCP, evaluation |
+| [journey/](docs/journey/) | the build diary, one entry per phase group |
+| [adr/](docs/adr/) | 20 decision records, each with the alternatives and the interview questions it raises |
+| [interview/](docs/interview/) | question bank and 11 STAR stories from what actually happened |
+| [failures.md](docs/failures.md) | 8 real bugs, with the debugging process |
 | [metrics.md](docs/metrics.md) | every measured number, with the command |
 
-## Setup
+## What it does today
 
-Requires Python 3.13 and [Poetry](https://python-poetry.org/).
+| | |
+|---|---|
+| **GitHub** | ETag conditional requests, incremental sync, Link-header pagination, rate-limit tracking, retries that distinguish "wait" from "give up" |
+| **Cloning** | blobless by default, no submodule recursion, hardened git environment, time and size budgets |
+| **RAG** | AST chunking on declaration boundaries, local embeddings, Qdrant embedded, hybrid retrieval with weighted rank fusion, cross-encoder reranking |
+| **Agent** | LangGraph, 13 nodes, SQLite checkpointing, a bounded repair cycle |
+| **Sandbox** | no network, read-only root, memory/PID/CPU limits, dropped capabilities, non-root, external timeout |
+| **Guardrails** | a policy engine with allow/require-approval/deny, injection detection, secret scanning |
+| **Human** | `interrupt()` + resume; no default, no timeout that approves |
+| **Interfaces** | 8 CLI commands, an MCP server exposing read-only tools |
 
-```bash
-poetry env use python3.13
-poetry install
-cp .env.example .env      # optional: a GitHub token raises 60 req/hr to 5,000
-poetry run pytest -m "not integration"
-```
+## Findings
 
-## Try it
+**Dense retrieval beat hybrid, and reranking made it worse.** Measured on 192
+labelled examples: Recall@5 0.835 dense vs 0.757 hybrid vs 0.775 with a
+cross-encoder, which also cost 46× the latency. A weight sweep showed hybrid
+converging monotonically towards dense-only, which is the signature of one ranker
+adding nothing the other lacked — [ADR-012](docs/adr/ADR-012-hybrid-retrieval.md).
 
-```bash
-# Compare clone strategies on any public repo
-poetry run python scripts/benchmark_clone.py simonw/sqlite-utils
-
-# Measure what conditional requests save
-poetry run python scripts/benchmark_github.py simonw/sqlite-utils
-
-# Run the agent: clone, analyse, rank 77 issues, pick one — with reasons
-poetry run python scripts/run_graph.py simonw/sqlite-utils
-
-# Index the repo and measure retrieval against ground truth from git history
-poetry run python scripts/benchmark_retrieval.py simonw/sqlite-utils
-```
-
-A CLI arrives in Phase 12.
-
-## What works today
-
-- **GitHub client** — conditional requests (ETag), incremental sync, Link-header
-  pagination, rate-limit tracking, retries that distinguish "wait" from "give
-  up". [`tools/github.py`](src/patchpilot/tools/github.py)
-- **Cloning** — blobless by default, submodules never recursed, hardened git
-  environment, time and size budgets. [`tools/git.py`](src/patchpilot/tools/git.py)
-- **Workspace confinement** — every path resolved through symlinks and refused
-  if it escapes. [`tools/workspace.py`](src/patchpilot/tools/workspace.py)
-- **Repository analysis** — languages, package manager, test command, file
-  classification, entirely deterministic.
-  [`analysis/repository.py`](src/patchpilot/analysis/repository.py)
-- **The agent graph** — LangGraph with typed state, halt-with-a-reason routing,
-  and SQLite checkpoints that let a run resume in a different process.
-  [`agent/graph.py`](src/patchpilot/agent/graph.py)
-- **Issue ranking** — six weighted factors plus hard blockers, fully
-  explainable, zero model tokens. [`agent/ranking.py`](src/patchpilot/agent/ranking.py)
-- **LLM abstraction** — a two-method protocol with Gemini and scripted
-  implementations, so the test suite runs offline and free. [`llm/`](src/patchpilot/llm/)
-- **Repository RAG** — AST-based chunking, local embeddings, Qdrant embedded,
-  hybrid dense+BM25 retrieval fused by rank, cross-encoder reranking.
-  [`rag/`](src/patchpilot/rag/)
-- **Retrieval evaluation** — ground truth derived from git history, so Recall@K
-  and MRR are measured rather than asserted.
-  [`evaluation/retrieval.py`](src/patchpilot/evaluation/retrieval.py)
-
-## Three findings so far
-
-**A shallow clone reads one commit of history.** Blobless reads all of it at
-~45% of a full clone's size. The fastest option was the one that could not do
-the job — [ADR-004](docs/adr/ADR-004-blobless-clone.md).
+**A shallow clone reads one commit of history.** Blobless reads all of it at ~45%
+of a full clone's size. The fastest option was the one that could not do the job.
 
 **A repeat issue fetch costs zero rate-limit budget** with conditional requests,
-against 2 without. Finding that out also uncovered a bug where a warm cache
-silently returned 21% fewer issues — [failures.md F-002](docs/failures.md).
+against two without.
 
-**Of 77 open issues on the target repo, 10 are worth an agent attempting** —
-ranked in under 3 ms for zero model tokens, each with a printable derivation.
-Determinism here is what makes later retrieval improvements measurable at all —
-[ADR-010](docs/adr/ADR-010-deterministic-ranking.md).
+**The sandbox controls are verified, not claimed.** A test inside the container
+tries to open a socket to 1.1.1.1 and fails the build if it succeeds.
 
-## Roadmap
+## What is not measured
 
-| Phase | | Status |
-|---|---|---|
-| 0 | Foundations | ✅ |
-| 1 | GitHub & repository analysis | ✅ |
-| 2 | LangGraph + LLM provider abstraction | ✅ |
-| 3 | Repository RAG (hybrid retrieval, Qdrant) | ✅ |
-| 4 | Issue investigation & root cause | |
-| 5 | Fix planning & code generation | |
-| 6 | Docker sandbox | |
-| 7 | Agentic debug loop | |
-| 8 | Guardrails & security | |
-| 9 | Human in the loop | |
-| 10 | Observability | |
-| 11 | Evaluation benchmark | |
-| 12 | CLI & MCP | |
-| 13 | Live deployment | |
+The end-to-end benchmark harness exists and is tested; it has not been run,
+because free-tier quota is exhausted. So the issue-to-patch rate, first-attempt
+fix rate and cost per fix are **unknown**, and no estimate is offered for them.
+
+One correct patch on `sqlite-utils` #841 — a +0/−4 diff removing exactly the two
+early returns the diagnosis identified, with all three citations verified against
+the source — is a single data point, not a success rate.
 
 ## Layout
 
 ```
-src/patchpilot/      package (src/ layout — imports resolve through the install)
+src/patchpilot/
 ├── models.py        domain vocabulary
-├── errors.py        typed failures
 ├── config.py        one validated settings inventory
-├── tools/           adapters: github, git, workspace, http_cache
+├── tools/           github, git, workspace, patching
 ├── analysis/        deterministic repository characterisation
-├── llm/             provider protocol + gemini + scripted fake
-├── agent/           state, reducers, ranking, nodes, graph
+├── llm/             provider protocol, gemini, fallback, cache, fake
 ├── rag/             chunking, embeddings, store, retrieval, reranking
-└── evaluation/      retrieval benchmark and metrics
+├── agent/           state, ranking, nodes, prompts, graph
+├── sandbox/         docker runner, output parsing
+├── guardrails/      policy engine, injection detection
+├── observability/   per-node timing and tokens
+├── evaluation/      retrieval and end-to-end benchmarks
+├── cli/             8 commands
+└── mcp/             read-only tools for other agents
 
-tests/unit/          121 tests, offline, ~7s
-tests/integration/   6 tests, real GitHub, marked `integration`
-docs/                concepts, journey, ADRs, interview prep
-scripts/             the benchmarks behind docs/metrics.md
+tests/unit/          467 tests, offline, ~17s
+tests/integration/   12 tests, real GitHub and real Docker
+docs/                concepts, journey, ADRs, failures, metrics, interview prep
 ```
 
 ## Development
 
 ```bash
 poetry run pytest -m "not integration"   # fast suite
-poetry run pytest -m integration         # real API (needs `gh auth login`)
-poetry run ruff check .
-poetry run mypy
+poetry run pytest -m integration         # real GitHub + Docker
+poetry run ruff check . && poetry run mypy
 ```

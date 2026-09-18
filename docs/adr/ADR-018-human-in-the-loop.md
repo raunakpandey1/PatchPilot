@@ -1,0 +1,140 @@
+# ADR-018 — Human approval via interrupt, with no default
+
+**Status:** Accepted · **Phase:** 9 · **Date:** 2026-09-18
+
+## Context
+
+PatchPilot can produce a patch that passes a repository's tests. Turning that
+into a pull request changes someone else's project. A passing test suite is
+evidence, not consent.
+
+## Options considered
+
+1. **Fully autonomous.** Open the PR if the tests pass.
+2. **Block on `input()`** inside the run.
+3. **Pause and resume** via checkpointing; approve through a separate command.
+4. **Approve by default after a timeout.**
+5. **A confidence threshold** — auto-approve above some score.
+
+## Decision
+
+**Pause and resume.** The graph stops at `interrupt()`, state is checkpointed,
+the process can exit, and a separate `patchpilot approve <run_id>` command
+resumes it with a decision.
+
+## Reasoning
+
+**Autonomous is wrong here** for a reason that is easy to state: a test suite
+tests what someone thought to test. A patch can pass every test and still change
+behaviour nobody covered, break an unstated contract, or be a correct fix to the
+wrong problem. Tests are necessary evidence and not sufficient permission.
+
+**Blocking on `input()` throws away the checkpointing that already exists.** The
+state is serialised after every step regardless, so making approval a blocking
+prompt means the reviewer must be at that terminal, then. Pausing costs nothing
+extra and allows the decision hours later, from a different machine — which is
+what a real review actually looks like.
+
+**Timeouts and confidence thresholds are rejected outright.** Both convert
+*silence* into *approval*. The absence of a decision is not a decision, and every
+convenience that blurs that removes the only layer with a human in it. A
+confidence score is also produced by the same system being reviewed, which makes
+it evidence about itself.
+
+### Consequences of that stance in the code
+
+Anything unrecognised is a **rejection**:
+
+```python
+return ApprovalStatus.REJECTED, f"unrecognised response {raw!r}; treated as rejection"
+```
+
+Being permissive is acceptable in most parsing. Here it is not: a malformed
+resume value must never become consent.
+
+And a **policy denial never reaches the human at all**. The review node halts
+first. Offering an override on a rule that is meant to be absolute is precisely
+how absolute rules get overridden — by someone tired, at the end of a long day,
+clicking through.
+
+## How the mechanism works
+
+`interrupt()` raises; LangGraph catches it, checkpoints, and returns with the run
+incomplete. A later `invoke` with the same `thread_id` and a `Command(resume=...)`
+re-enters the node, and `interrupt()` returns the resumed value instead of
+raising.
+
+This is the concrete payoff of [ADR-007](ADR-007-langgraph.md): a function's
+local variables cannot survive the process exiting, and this does.
+
+## Tradeoffs
+
+**Against:**
+
+- **Throughput.** Every patch waits for a person. That is the point, and it does
+  mean this cannot run unattended at scale.
+- **Two commands instead of one**, which is slightly more to learn.
+- **Paused runs accumulate** in the checkpoint database and need cleaning up.
+- **`auto_approve` exists** for benchmarks, where no human is present and nothing
+  is pushed. It logs a warning every time, because a convenience flag that
+  becomes a production default is exactly how this kind of control dies.
+
+**For:** the decision can happen when and where a real review happens; nothing
+consequential is automatic; and the failure mode of the whole system is "it
+waited" rather than "it pushed".
+
+## Consequences
+
+- The approval payload is assembled as **data** rather than a formatted string,
+  so a CLI, a web UI and a test can each render it — and a test can assert the
+  diff is actually present rather than that some text was produced.
+- Everything a reviewer needs is in one object: issue, root cause, plan, diff,
+  test results, policy objections, injection signals, repair count, tokens.
+- Phase 13's UI renders the same payload.
+
+## Interview questions
+
+**Q: Why require human approval if the tests pass?**
+
+Because a test suite tests what someone thought to test. A patch can pass every
+test and still break an unstated contract or be a correct fix to the wrong
+problem. Tests are necessary evidence, not sufficient permission — and the thing
+being changed is someone else's repository.
+
+**Q: How does pausing actually work?**
+
+`interrupt()` raises, LangGraph checkpoints the state and returns with the run
+incomplete, and the process can exit entirely. A later invocation with the same
+thread id and a resume command re-enters the node, and the interrupt returns the
+decision instead of raising. That is the concrete payoff of building on a graph:
+local variables cannot survive a process exit and serialised state can.
+
+**Q: Why not approve automatically after a timeout, or above a confidence
+threshold?**
+
+Both turn silence into approval, and the absence of a decision is not a decision.
+A confidence score is also generated by the same system being reviewed, so it is
+evidence about itself. In the same spirit, anything unrecognised in the resume
+value is treated as a rejection — being permissive is fine in most parsing and
+unacceptable in the one direction that produces consent.
+
+**Q: Can a human override a policy denial?**
+
+No, and deliberately. A denied patch halts in the review node before a human sees
+it. If something is genuinely never acceptable — a force push, disabling a test —
+then putting it on an approval screen only creates an opportunity to approve it
+at the end of a long day. Things that are judgement calls get shown; things that
+are not, do not.
+
+## Behavioural question this answers
+
+> *"Tell me about a time you made a system less convenient on purpose."*
+
+The agent can produce a patch that passes a repository's whole test suite, and I
+still made it stop and wait for a person — with no timeout that approves, no
+confidence threshold that skips the wait, and an unrecognised response treated as
+a rejection rather than as consent. Every one of those would have been more
+convenient and each converts silence into permission. I also made policy denials
+bypass the human entirely rather than appear as an overridable warning, because
+an absolute rule you can click past is not absolute. The system's failure mode is
+now "it waited", which is the one I want.
