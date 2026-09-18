@@ -424,3 +424,58 @@ components that are individually correct, wrong in combination, failing silently
 rather than loudly. It was only caught because one test exercised the *whole
 stack* rather than each layer alone — which is the argument for having a few
 integration-shaped tests even when the unit tests are thorough.
+
+---
+
+## F-008 — The test parser could not read our own test command's output
+
+| | |
+|---|---|
+| **Date** | 2026-09-18 |
+| **Phase** | 6 |
+| **Component** | `sandbox/parsing.py` |
+| **Severity** | A fully passing suite reported **0 tests passed** |
+
+**Symptom.** The first real sandbox run built an image, ran the tests, and
+returned `outcome=PASSED, exit_code=0` — with `passed_count=0`, while the
+captured output plainly said `1 passed in 0.01s`.
+
+**Investigation.** The parser looks for pytest's summary line, and required it
+to be the decorated form:
+
+```python
+if line.startswith("=") and PYTEST_COUNT.search(line):
+```
+
+That form — `===== 1 failed, 4 passed in 0.31s =====` — is what pytest prints by
+default. But under `-q --no-header` it prints the terse form instead, with no
+decoration at all:
+
+```
+1 passed in 0.01s
+```
+
+And `-q --no-header` is precisely the command **our own repository analyzer
+generates** (`analysis/repository.py`), because a terse suite is easier to read.
+
+**Root cause.** Two components written days apart, each correct alone. The
+analyzer chose flags that make output compact; the parser was written against
+the default format. Nothing connected the two.
+
+**Fix.** Accept both forms. The terse pattern requires a trailing duration
+(`in 0.01s`), so ordinary prose containing the word "passed" does not match it —
+there is a test for exactly that.
+
+**Verification.** Three parser tests, plus the six live Docker tests that
+previously failed and now pass.
+
+**Prevention.** When one component chooses a tool's flags and another parses its
+output, they are coupled whether or not they import each other. The test that
+would have caught this is the one that runs the *real* command and parses the
+*real* output — which is what the integration suite does, and why it exists.
+
+**Lesson.** The same pattern as F-005, F-006 and F-007: individually correct
+components, wrong in combination, failing quietly. Four of the eight failures in
+this log are integration bugs rather than logic bugs. That is not a coincidence
+— unit tests verify the piece you were thinking about, and the bugs live in the
+seams you were not.

@@ -443,3 +443,52 @@ produced by a different model than the primary. That is why `provider.name`
 reports the model that answered rather than the one configured, and why every
 measurement records it. A number without the model that produced it is not a
 number.
+
+---
+
+## Phase 6 — Sandbox
+
+**Command:** `poetry run pytest -m integration tests/integration/test_sandbox_live.py`
+**When:** 2026-09-18 · Docker Desktop on M1, 8 GB
+
+| metric | value |
+|---|---|
+| integration tests | **6 / 6 passing** |
+| total runtime | 59 s |
+| image build (small repo) | ~16 s |
+| test execution inside container | ~0.7 s |
+| base image | `python:3.13-slim` |
+
+### The controls, verified rather than assumed
+
+Each of these is a live test that would fail if the control were absent:
+
+| control | how it is proven |
+|---|---|
+| **no network egress** | a test tries `socket.create_connection(('1.1.1.1', 53))` and must fail |
+| **host filesystem invisible** | a test asserts `/Users` does not exist, and `/repo` does |
+| **not running as root** | a test asserts `os.getuid() != 0` |
+| **wall-clock timeout** | a test sleeps 600 s against a 10 s limit and is killed |
+| passing suite detected | 1 passed, reported as passed |
+| failing suite attributed | the specific failing test is named in the repair feedback |
+
+The network test is the one that matters most. A test suite that can reach the
+internet can exfiltrate anything the process can see, and "we passed
+`network_disabled=True`" is a claim about our code — the test is a claim about
+Docker's behaviour, which is the part that actually protects anything.
+
+### Install and run are separated on purpose
+
+Dependency installation needs network **and** executes arbitrary code —
+`setup.py` runs, and so do build hooks. So it happens once, at image build, in
+its own container. Test execution then runs against that image with no network
+at all. Treating install and run as the same trust level is the mistake the
+split exists to avoid.
+
+### What this does not protect against
+
+A container shares the host kernel, so a kernel exploit escapes it. For running
+tests from public repositories that is an accepted risk, stated rather than
+glossed: the realistic threats are accidental damage and opportunistic
+exfiltration, both of which these controls stop. A VM or gVisor would be the
+honest answer to a targeted attacker.

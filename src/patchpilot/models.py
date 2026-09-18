@@ -449,3 +449,136 @@ class Patch(BaseModel):
             f"{len(self.edits)} edit(s) across {len(self.files_changed)} file(s), "
             f"+{self.lines_added}/-{self.lines_removed} lines"
         )
+
+
+# --- Sandboxed validation ---------------------------------------------------
+
+
+class CheckOutcome(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    ERROR = "error"          # the check could not run — not the patch's fault
+    TIMEOUT = "timeout"
+    SKIPPED = "skipped"      # no such command in this repository
+
+
+class TestFailure(BaseModel):
+    """One failing test, parsed from the runner's output.
+
+    Parsed rather than passed through as a blob because the debug loop needs the
+    *specific* failure to repair. Handing a model 4,000 lines of pytest output
+    wastes context and buries the one line that matters.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    test_id: str
+    message: str = ""
+    file_path: str | None = None
+    line: int | None = None
+
+    def summary(self) -> str:
+        if self.file_path and self.line is not None:
+            location = f" ({self.file_path}:{self.line})"
+        elif self.file_path and self.file_path not in self.test_id:
+            location = f" ({self.file_path})"
+        else:
+            location = ""
+        message = f": {self.message[:200]}" if self.message else ""
+        return f"{self.test_id}{location}{message}"
+
+
+class CheckResult(BaseModel):
+    """The result of running one command — tests, lint, or type checking."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    command: tuple[str, ...]
+    outcome: CheckOutcome
+    exit_code: int | None = None
+    duration_s: float = 0.0
+
+    passed_count: int = 0
+    failed_count: int = 0
+    failures: tuple[TestFailure, ...] = ()
+
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        """`SKIPPED` counts as ok: a repository without a linter has not failed
+        linting. Conflating "absent" with "failed" would block every patch to a
+        project that happens not to use mypy."""
+        return self.outcome in (CheckOutcome.PASSED, CheckOutcome.SKIPPED)
+
+    def summary(self) -> str:
+        if self.outcome is CheckOutcome.SKIPPED:
+            return f"{self.name}: skipped (not configured)"
+        counts = (
+            f" ({self.passed_count} passed, {self.failed_count} failed)"
+            if self.passed_count or self.failed_count
+            else ""
+        )
+        return f"{self.name}: {self.outcome}{counts} in {self.duration_s:.1f}s"
+
+
+class ValidationResult(BaseModel):
+    """Everything the sandbox found out about a patch."""
+
+    model_config = ConfigDict(frozen=True)
+
+    checks: tuple[CheckResult, ...] = ()
+    image: str = ""
+    sandbox_error: str | None = None
+
+    @property
+    def tests(self) -> CheckResult | None:
+        return next((c for c in self.checks if c.name == "tests"), None)
+
+    @property
+    def passed(self) -> bool:
+        """The patch is acceptable only if every check that ran is ok.
+
+        A sandbox error is *not* a pass. "We could not tell" and "it works" must
+        never be the same value, or a broken sandbox silently approves patches.
+        """
+        return self.sandbox_error is None and bool(self.checks) and all(c.ok for c in self.checks)
+
+    @property
+    def failures(self) -> tuple[TestFailure, ...]:
+        tests = self.tests
+        return tests.failures if tests else ()
+
+    def summary_for_human(self) -> str:
+        if self.sandbox_error:
+            return f"sandbox error: {self.sandbox_error}"
+        lines = [c.summary() for c in self.checks]
+        if self.failures:
+            lines.append("failing tests:")
+            lines += [f"  - {f.summary()}" for f in self.failures[:10]]
+        return "\n".join(lines)
+
+    def feedback_for_repair(self, max_failures: int = 5) -> str:
+        """What the debug loop is given.
+
+        Bounded on purpose. Twenty near-identical failures are usually one bug,
+        and sending all of them costs tokens while making the actual signal
+        harder to find.
+        """
+        if self.sandbox_error:
+            return f"The checks could not run: {self.sandbox_error}"
+
+        parts: list[str] = []
+        for check in self.checks:
+            if check.ok:
+                continue
+            parts.append(f"{check.name} {check.outcome} (exit {check.exit_code})")
+            for failure in check.failures[:max_failures]:
+                parts.append(f"  {failure.summary()}")
+            if len(check.failures) > max_failures:
+                parts.append(f"  ... and {len(check.failures) - max_failures} more")
+            if not check.failures and check.stdout_tail:
+                parts.append(f"  output: {check.stdout_tail[-800:]}")
+        return "\n".join(parts) or "checks failed with no parseable output"

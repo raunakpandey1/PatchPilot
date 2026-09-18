@@ -45,6 +45,7 @@ from patchpilot.models import (
     Repository,
     RepositorySnapshot,
     RootCause,
+    ValidationResult,
 )
 from patchpilot.rag.store import ScoredChunk
 
@@ -107,6 +108,11 @@ class AgentState(TypedDict, total=False):
 
     debug_attempts: int
 
+    # --- filled by the validation node -------------------------------------
+    validation: ValidationResult | None
+    """What the sandbox found. `None` means it has not run; a result with
+    `sandbox_error` set means it could not tell — which is never a pass."""
+
     # --- accumulated across every node ------------------------------------
     usage: Annotated[Usage, accumulate_usage]
     """Total tokens and latency. Summed, not replaced."""
@@ -149,6 +155,7 @@ def initial_state(run_id: str, repository_full_name: str) -> AgentState:
         working_copy="",
         patch_errors=[],
         debug_attempts=0,
+        validation=None,
         usage=Usage(),
         visited=[],
         errors=[],
@@ -177,6 +184,8 @@ def summarize(state: AgentState) -> str:
         parts.append(plan.summary_for_human())
     if patch := state.get("patch"):
         parts.append(f"patch: {patch.summary_for_human()}")
+    if validation := state.get("validation"):
+        parts.append(validation.summary_for_human())
     if state.get("halted"):
         parts.append(f"HALTED: {state.get('halt_reason', '')}")
     if errors := state.get("errors"):

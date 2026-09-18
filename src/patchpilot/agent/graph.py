@@ -59,6 +59,7 @@ from patchpilot.agent.nodes.issues import (
     make_select_issue_node,
 )
 from patchpilot.agent.nodes.repository import make_analyze_repository_node
+from patchpilot.agent.nodes.validation import make_validate_patch_node
 from patchpilot.agent.state import AgentState, initial_state
 from patchpilot.logging import get_logger
 
@@ -100,6 +101,7 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
     graph.add_node("analyze_root_cause", make_root_cause_node(deps))  # type: ignore[call-overload]
     graph.add_node("plan_fix", make_plan_fix_node(deps))  # type: ignore[call-overload]
     graph.add_node("generate_patch", make_generate_patch_node(deps))  # type: ignore[call-overload]
+    graph.add_node("validate_patch", make_validate_patch_node(deps))  # type: ignore[call-overload]
 
     graph.add_edge(START, "analyze_repository")
 
@@ -113,13 +115,14 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
         ("retrieve_context", "analyze_root_cause"),
         ("analyze_root_cause", "plan_fix"),
         ("plan_fix", "generate_patch"),
+        ("generate_patch", "validate_patch"),
     ):
         graph.add_conditional_edges(
             source, continue_or_halt, {"continue": following, "halt": END}
         )
 
     graph.add_edge("rank_issues", "select_issue")
-    graph.add_edge("generate_patch", END)
+    graph.add_edge("validate_patch", END)
 
     return graph.compile(checkpointer=checkpointer)
 

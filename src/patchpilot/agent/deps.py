@@ -23,6 +23,7 @@ from patchpilot.config import Settings
 from patchpilot.config import settings as default_settings
 from patchpilot.llm.base import LLMProvider
 from patchpilot.rag.retrieval import HybridRetriever, RetrievalMode
+from patchpilot.sandbox.docker_runner import DockerSandbox
 from patchpilot.tools.git import CloneStrategy
 from patchpilot.tools.github import GitHubClient
 from patchpilot.tools.workspace import Workspace
@@ -56,3 +57,13 @@ class AgentDeps:
     # Chunks put in front of the model. Kept small deliberately: more context is
     # not better context, and every chunk costs tokens on a free tier.
     retrieval_limit: int = 8
+
+    # Validation. Optional because earlier phases run without Docker; the node
+    # halts with a stated reason rather than presenting an unvalidated patch.
+    sandbox: DockerSandbox | None = None
+
+    # Lint is on by default and type checking is not: a repository's linter
+    # usually passes on its own code, whereas many projects have type errors
+    # they tolerate, and failing a patch for pre-existing ones would be wrong.
+    validate_lint: bool = True
+    validate_types: bool = False
