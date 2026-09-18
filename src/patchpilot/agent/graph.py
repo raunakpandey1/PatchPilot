@@ -186,6 +186,8 @@ def run(
     *,
     run_id: str,
     checkpointer: Any | None = None,
+    max_debug_attempts: int = 3,
+    issue_number: int | None = None,
 ) -> AgentState:
     """Execute the graph once and return the final state.
 
@@ -196,10 +198,20 @@ def run(
     compiled = build_graph(deps, checkpointer=checkpointer)
     config = {"configurable": {"thread_id": run_id}}
 
-    log.info("run_started", run_id=run_id, repo=repository_full_name)
-    final: AgentState = compiled.invoke(
-        initial_state(run_id, repository_full_name), config=config
+    state = initial_state(
+        run_id, repository_full_name, max_debug_attempts=max_debug_attempts
     )
+    if issue_number is not None:
+        # Pinning an issue makes a run reproducible, which the benchmark needs:
+        # otherwise a ranking change would silently alter which issue was
+        # attempted between runs.
+        state["requested_issue"] = issue_number
+
+    log.info(
+        "run_started", run_id=run_id, repo=repository_full_name,
+        issue=issue_number, max_debug_attempts=max_debug_attempts,
+    )
+    final: AgentState = compiled.invoke(state, config=config)
     selected = final.get("selected_issue")
     log.info(
         "run_finished",

@@ -88,6 +88,13 @@ class AgentState(TypedDict, total=False):
     selected_issue: Issue | None
     selection_reason: str
 
+    requested_issue: int | None
+    """A specific issue to work on, overriding the ranking.
+
+    Needed for reproducibility: without it, a change to the ranker would
+    silently alter which issue a benchmark run attempted, making two runs
+    incomparable for reasons unrelated to what was being measured."""
+
     # --- filled by the investigation nodes ---------------------------------
     retrieved_chunks: list[ScoredChunk]
     """The code excerpts put in front of the model. Kept in state so a failed
@@ -165,6 +172,7 @@ def initial_state(
         ranked_issues=[],
         selected_issue=None,
         selection_reason="",
+        requested_issue=None,
         retrieved_chunks=[],
         root_cause=None,
         fix_plan=None,

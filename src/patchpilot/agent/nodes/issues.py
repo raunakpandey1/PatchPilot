@@ -64,6 +64,29 @@ def make_rank_issues_node(deps: AgentDeps) -> NodeFn:
 def make_select_issue_node(deps: AgentDeps) -> NodeFn:
     def select_issue_node(state: AgentState) -> AgentState:
         ranked = state.get("ranked_issues") or []
+
+        # An explicitly requested issue bypasses the ranking entirely. The
+        # ranker decides what is *worth* attempting; a caller naming an issue
+        # has already made that decision, and overriding them would be
+        # surprising — a benchmark pins issues precisely so results stay
+        # comparable across ranker changes.
+        if (requested := state.get("requested_issue")) is not None:
+            match = next((r for r in ranked if r.issue.number == requested), None)
+            if match is None:
+                return AgentState(
+                    visited=["select_issue"], halted=True,
+                    halt_reason=f"issue #{requested} is not among the open issues",
+                )
+            log.info(
+                "issue_selected", number=requested, requested=True,
+                score=round(match.score, 3), verdict=match.verdict,
+            )
+            return AgentState(
+                visited=["select_issue"],
+                selected_issue=match.issue,
+                selection_reason=match.explain(),
+            )
+
         actionable = [r for r in ranked if r.is_actionable]
 
         if not actionable:

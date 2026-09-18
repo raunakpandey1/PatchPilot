@@ -96,4 +96,13 @@ class Settings(BaseSettings):
         return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
 
 
+    def github_token_value(self) -> str | None:
+        """The token as a plain string, or None.
+
+        A named method rather than reaching for `.get_secret_value()` at call
+        sites: every unwrapping of a secret should be greppable in review.
+        """
+        return self.github_token.get_secret_value() if self.github_token else None
+
+
 settings = Settings()
