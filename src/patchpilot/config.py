@@ -53,10 +53,27 @@ class Settings(BaseSettings):
     # LLMProvider protocol, so this is the only place the choice appears.
     llm_provider: Literal["gemini", "fake"] = "gemini"
     gemini_api_key: SecretStr | None = None
-    llm_model: str = "gemini-2.0-flash"
+    # Model IDs are not stable: Google retired `gemini-2.0-flash` and returned
+    # a 404 pointing at its successor. Keep this configurable and check what is
+    # actually available with `poetry run python scripts/list_models.py`.
+    llm_model: str = "gemini-3.8-flash"
+
+    # A cheaper, much faster model for bulk or mechanical stages. Measured on
+    # the same prompt: flash-lite answered in 1.3 s against 3.8-flash's 5.3 s.
+    llm_model_fast: str = "gemini-3.5-flash-lite"
+
+    # Tried in order when the primary is unavailable (503/429/network only).
+    # Free-tier capacity genuinely varies per model minute to minute.
+    llm_fallback_models: tuple[str, ...] = ("gemini-3.6-flash",)
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_max_output_tokens: int = Field(default=4096, gt=0)
     llm_max_attempts: int = Field(default=4, ge=1)
+
+    # Free tier: a hard daily call limit. These two make it safe to iterate.
+    # The cache makes a repeated prompt free; the budget makes a runaway loop
+    # impossible rather than unlikely.
+    llm_cache_enabled: bool = True
+    llm_max_calls: int | None = Field(default=200, ge=1)
 
     # --- Agent -------------------------------------------------------------
     # Where LangGraph checkpoints live. Deleting this file loses the ability to

@@ -359,3 +359,68 @@ Two separate measurement bugs in one phase — F-005 and this one — and neithe
 produced an error or a failing test. Both produced *numbers*. The practice that
 caught both was refusing to believe the first result: print the labels before
 trusting them, and re-measure the same thing a second way before publishing it.
+
+---
+
+## F-007 — A cache key that moved, so the cache never hit
+
+| | |
+|---|---|
+| **Date** | 2026-09-18 |
+| **Phase** | 4 |
+| **Component** | `llm/cache.py`, `llm/fallback.py` |
+| **Severity** | The cache silently did nothing whenever a fallback had occurred — on a free tier, that is quota spent for no reason |
+
+**Symptom.** One test failed: after two identical requests through a
+cache-wrapped fallback chain, the failing primary provider had been called
+**twice** instead of once. The second request had not hit the cache.
+
+Every test of the cache *in isolation* passed.
+
+**Investigation.** The cache key is a hash of everything that can change the
+answer, including the provider identity:
+
+```python
+payload = json.dumps({"model": self._inner.name, "system": ..., "messages": ...})
+```
+
+`FallbackProvider.name` is deliberately **not** a static description of the
+chain. It reports *whichever model actually answered*, because a result produced
+by a fallback is not comparable with one from the primary and the caller needs
+to record which model it got.
+
+So the sequence was:
+
+1. First request — the chain's `name` is still the primary's, since nothing has
+   answered yet. Key computed with `"gemini/primary"`. Miss. The primary 503s,
+   the backup answers, and `name` now becomes the backup's.
+2. Second, identical request — key now computed with `"gemini/backup"`. A
+   **different key**. Miss again.
+
+**Root cause.** The cache key depended on a value that mutates as a consequence
+of using the cache's own subject. Two individually correct designs — a name that
+reports the answering model, and a key that includes the provider — combined
+into a cache that could never hit after a fallback.
+
+**Fix.** Resolve a *stable* identity once, at construction. For a fallback chain
+that is the chain itself (the set of models that could serve the request); for a
+single provider the name is already stable, and capturing it once makes that
+explicit.
+
+```python
+chain = getattr(inner, "chain", None)
+self._identity = "|".join(chain) if chain else inner.name
+```
+
+**Verification.** `test_the_cache_key_does_not_move_when_the_chain_falls_back`
+asserts both halves: the chain's name *does* change, and the cache still hits.
+
+**Prevention.** Anything used to derive a cache key must be immutable for the
+lifetime of the cache. If it is a property rather than a stored value, ask what
+can change it.
+
+**Lesson.** The same shape as F-005 and F-006, in a different place: two
+components that are individually correct, wrong in combination, failing silently
+rather than loudly. It was only caught because one test exercised the *whole
+stack* rather than each layer alone — which is the argument for having a few
+integration-shaped tests even when the unit tests are thorough.

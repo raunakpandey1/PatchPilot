@@ -315,3 +315,76 @@ Both produced plausible numbers rather than errors:
   configuration twice and getting 0.817 and 0.695.
 
 See [failures.md](failures.md).
+
+---
+
+## Phase 4 — First live root-cause analysis
+
+**Target:** `simonw/sqlite-utils` issue #841 — *"rows_where() and delete_where()
+fail to throw errors against non-existent tables"*
+**When:** 2026-09-18 · `gemini-3.8-flash`, temperature 0
+
+| metric | value |
+|---|---|
+| retrieval | 8 chunks from 2 files, dense mode |
+| model calls | **1** |
+| tokens | **2,731** (1 call) |
+| latency | 8.2 s |
+| confidence reported | high |
+| citations produced | 3 |
+| citations verified correct | **3 / 3** |
+| repeat run (cached) | **0.0 s, 0 calls** |
+
+### Retrieval put the right code in front of the model
+
+```
+0.860  sqlite_utils/db.py:4091-4116   Table.delete_where     ← named in the issue
+0.835  sqlite_utils/db.py:2140-2180   Queryable.rows_where   ← named in the issue
+0.818  sqlite_utils/db.py:2343-2344   Table.exists           ← needed for the fix
+```
+
+Both functions the issue names are in the top two results.
+
+### The analysis, and whether it is actually right
+
+> Both `rows_where()` and `delete_where()` check `if not self.exists()` and
+> return early instead of attempting to execute their queries against
+> non-existent tables.
+
+Checked against the source, every citation is exact:
+
+| cited | actual code |
+|---|---|
+| `db.py:2160-2161` | `if not self.exists(): return` — inside `rows_where` ✓ |
+| `db.py:4106-4107` | `if not self.exists(): return self` — inside `delete_where` ✓ |
+| `db.py:2120-2124` | `count_where` with **no** such check, executing directly ✓ |
+
+The third is the interesting one. It is not part of the bug — it is the
+*contrast case* that proves the diagnosis: a sibling method without the early
+return does raise, which is exactly why the two named ones do not.
+
+**One correct analysis is not a success rate.** Phase 11 measures this over the
+whole benchmark. This is a single data point, recorded because it is the first
+end-to-end evidence that the pipeline works.
+
+---
+
+## Phase 4 — Free-tier model availability
+
+Measured while diagnosing a 503, 2026-09-18. Same prompt, same key, minutes
+apart:
+
+| model | result |
+|---|---|
+| `gemini-3.8-flash` | 503 UNAVAILABLE |
+| `gemini-3.7-flash` | 503 UNAVAILABLE |
+| `gemini-3.6-flash` | OK, 10.9 s |
+| `gemini-3.5-flash-lite` | OK, 1.4 s |
+
+Availability varies **per model, minute to minute**, which is why retrying one
+model harder does not help and a fallback chain does. The earlier default,
+`gemini-2.0-flash`, had been retired entirely and returned 404.
+
+**Cost control for a free tier:** responses are cached on disk keyed on the full
+request, so a repeated prompt costs nothing — verified above at 0 calls. A call
+budget (default 200) makes a runaway loop impossible rather than unlikely.
