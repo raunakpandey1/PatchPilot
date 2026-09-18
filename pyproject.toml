@@ -89,3 +89,12 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "docker.*"
 ignore_missing_imports = true
+
+# The MCP SDK's server decorators are untyped, so every registration inside
+# `serve()` is an untyped call. Relaxed for that one module rather than
+# scattering per-line ignores that churn whenever the SDK changes shape. The
+# tool handlers themselves are ordinary typed code and are still checked.
+[[tool.mypy.overrides]]
+module = "patchpilot.mcp.server"
+disallow_untyped_calls = false
+disallow_untyped_decorators = false

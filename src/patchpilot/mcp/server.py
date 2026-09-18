@@ -337,12 +337,11 @@ async def serve() -> None:
 
     server: Server = Server("patchpilot")
 
-    # The MCP SDK's decorators are untyped, so mypy cannot see through them.
-    @server.list_tools()  # type: ignore[untyped-decorator]
+    @server.list_tools()
     async def list_tools() -> list[types.Tool]:
         return [types.Tool(**schema) for schema in TOOL_SCHEMAS]
 
-    @server.call_tool()  # type: ignore[untyped-decorator]
+    @server.call_tool()
     async def handle(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
         log.info("mcp_tool_called", tool=name)
         return [types.TextContent(type="text", text=call_tool(name, arguments))]
