@@ -388,3 +388,58 @@ model harder does not help and a fallback chain does. The earlier default,
 **Cost control for a free tier:** responses are cached on disk keyed on the full
 request, so a repeated prompt costs nothing — verified above at 0 calls. A call
 budget (default 200) makes a runaway loop impossible rather than unlikely.
+
+---
+
+## Phase 5 — First generated patch
+
+**Target:** `simonw/sqlite-utils` #841 · **When:** 2026-09-18
+
+| metric | value |
+|---|---|
+| model calls | 3 (root cause, plan, patch) |
+| tokens | **6,625** total |
+| edits produced | 2 |
+| files changed | 1 |
+| lines added / removed | **+0 / −4** |
+| edits that applied cleanly | **2 / 2** |
+
+### The patch
+
+```diff
+--- a/sqlite_utils/db.py
+@@ -2159,8 +2159,6 @@
+-        if not self.exists():
+-            return
+@@ -4104,8 +4102,6 @@
+-        if not self.exists():
+-            return self
+```
+
+Exactly the two early returns the diagnosis identified, and nothing else. The
+plan also recorded the right risk unprompted: *"code relying on these silently
+returning empty on non-existent tables will now raise"*.
+
+**Not yet validated.** No tests have been run against this patch — that is Phase
+6. "The patch looks right" is not a result; "the test suite passes with it
+applied" is.
+
+### The fallback chain earned its place
+
+During this single run the log recorded five fallback events:
+
+```
+gemini-3.8-flash   503 UNAVAILABLE      (x3)
+gemini-3.6-flash   503 UNAVAILABLE      (x2)
+gemini-3.8-flash   429 RESOURCE_EXHAUSTED
+```
+
+Without a chain, the run fails. With one, it completed — on the third model.
+The 429 is the free-tier quota, which is the constraint this project actually
+operates under.
+
+**Design consequence:** because the fallback answered, part of this run was
+produced by a different model than the primary. That is why `provider.name`
+reports the model that answered rather than the one configured, and why every
+measurement records it. A number without the model that produced it is not a
+number.

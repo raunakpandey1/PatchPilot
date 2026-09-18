@@ -38,7 +38,14 @@ from typing import Annotated, TypedDict
 
 from patchpilot.agent.ranking import RankedIssue
 from patchpilot.llm.base import Usage
-from patchpilot.models import Issue, Repository, RepositorySnapshot, RootCause
+from patchpilot.models import (
+    FixPlan,
+    Issue,
+    Patch,
+    Repository,
+    RepositorySnapshot,
+    RootCause,
+)
 from patchpilot.rag.store import ScoredChunk
 
 
@@ -86,6 +93,20 @@ class AgentState(TypedDict, total=False):
 
     root_cause: RootCause | None
 
+    # --- filled by the fixing nodes ----------------------------------------
+    fix_plan: FixPlan | None
+    patch: Patch | None
+
+    working_copy: str
+    """Path to the isolated copy the patch was applied to. A string rather than a
+    Path because state is serialised to the checkpoint database."""
+
+    patch_errors: Annotated[list[str], operator.add]
+    """Why edits failed to apply. Distinct from `errors` because these are
+    repairable by the Phase 7 debug loop rather than run-ending."""
+
+    debug_attempts: int
+
     # --- accumulated across every node ------------------------------------
     usage: Annotated[Usage, accumulate_usage]
     """Total tokens and latency. Summed, not replaced."""
@@ -123,6 +144,11 @@ def initial_state(run_id: str, repository_full_name: str) -> AgentState:
         selection_reason="",
         retrieved_chunks=[],
         root_cause=None,
+        fix_plan=None,
+        patch=None,
+        working_copy="",
+        patch_errors=[],
+        debug_attempts=0,
         usage=Usage(),
         visited=[],
         errors=[],
@@ -147,6 +173,10 @@ def summarize(state: AgentState) -> str:
         parts.append(f"retrieved {len(chunks)} chunks from {files} files")
     if root_cause := state.get("root_cause"):
         parts.append(root_cause.summary_for_human())
+    if plan := state.get("fix_plan"):
+        parts.append(plan.summary_for_human())
+    if patch := state.get("patch"):
+        parts.append(f"patch: {patch.summary_for_human()}")
     if state.get("halted"):
         parts.append(f"HALTED: {state.get('halt_reason', '')}")
     if errors := state.get("errors"):

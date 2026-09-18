@@ -351,3 +351,101 @@ class RootCause(BaseModel):
             lines.append("  missing:")
             lines += [f"    - {m}" for m in self.missing_information]
         return "\n".join(lines)
+
+
+# --- Fix planning and patches -----------------------------------------------
+
+
+class FixPlan(BaseModel):
+    """What the agent intends to do, before it writes any code.
+
+    Separate from the patch on purpose. A plan is cheap to produce, cheap to
+    read, and cheap to reject — so a human (or the policy engine in Phase 8) can
+    stop a bad approach before any code is generated, rather than reviewing a
+    diff that should never have existed.
+
+    It also gives the Phase 7 debug loop something to check against: a patch that
+    edits files the plan never mentioned is a signal that the model wandered.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    approach: str = Field(description="One paragraph: how the fix works.")
+    files_to_change: tuple[str, ...] = Field(description="Paths this fix should touch.")
+    steps: tuple[str, ...] = Field(description="Ordered changes to make.")
+    test_strategy: str = Field(
+        description="How to tell the fix worked, using the repository's existing tests."
+    )
+    risks: tuple[str, ...] = Field(
+        default=(), description="What this change could break."
+    )
+
+    def summary_for_human(self) -> str:
+        lines = [f"Plan: {self.approach}", f"  files: {', '.join(self.files_to_change)}"]
+        lines += [f"  {i}. {step}" for i, step in enumerate(self.steps, 1)]
+        lines.append(f"  verify by: {self.test_strategy}")
+        if self.risks:
+            lines.append("  risks:")
+            lines += [f"    - {risk}" for risk in self.risks]
+        return "\n".join(lines)
+
+
+class CodeEdit(BaseModel):
+    """One exact-text replacement.
+
+    **Not a line range, and not a unified diff hunk.** Both require the model to
+    do line-number arithmetic — counting context lines, getting ``@@ -40,7 +40,9``
+    right — which models are unreliable at and which fails in a way that looks
+    like a formatting error rather than a wrong fix.
+
+    Reproducing an exact snippet of text it was just shown is something models
+    are good at, and it is verifiable: ``old_text`` either appears in the file
+    exactly once or it does not. Both failure modes are detectable in code, with
+    a precise message the Phase 7 debug loop can act on.
+
+    The real unified diff is then computed by us, from the before and after
+    states, so it is correct by construction.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    file_path: str
+    old_text: str = Field(
+        min_length=1,
+        description="Exact existing text to replace. Must appear exactly once in the file.",
+    )
+    new_text: str = Field(description="Replacement text. Empty string deletes.")
+    reason: str = Field(description="Why this specific change.")
+
+
+class Patch(BaseModel):
+    """A proposed change: the edits, and the diff computed from applying them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    edits: tuple[CodeEdit, ...]
+    diff: str = ""
+    files_changed: tuple[str, ...] = ()
+    explanation: str = ""
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.edits
+
+    @property
+    def lines_added(self) -> int:
+        return sum(
+            1 for line in self.diff.splitlines() if line.startswith("+") and not line.startswith("+++")
+        )
+
+    @property
+    def lines_removed(self) -> int:
+        return sum(
+            1 for line in self.diff.splitlines() if line.startswith("-") and not line.startswith("---")
+        )
+
+    def summary_for_human(self) -> str:
+        return (
+            f"{len(self.edits)} edit(s) across {len(self.files_changed)} file(s), "
+            f"+{self.lines_added}/-{self.lines_removed} lines"
+        )
