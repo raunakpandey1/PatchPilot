@@ -7,6 +7,8 @@ dependencies = [
     "pydantic (>=2.9,<3.0)",
     "pydantic-settings (>=2.6,<3.0)",
     "structlog (>=24.4,<26.0)",
+    "httpx (>=0.28,<0.29)",
+    "tenacity (>=9.0,<10.0)",
 ]
 
 [tool.poetry]
@@ -14,6 +16,10 @@ packages = [{ include = "patchpilot", from = "src" }]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
+respx = "^0.22"
+pytest-cov = "^6.0"
+ruff = "^0.8"
+mypy = "^1.13"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -25,3 +31,27 @@ addopts = "-q --strict-markers"
 [build-system]
 requires = ["poetry-core>=2.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = ["E501"]  # line length is handled by the formatter, not the linter
+
+[tool.ruff.lint.per-file-ignores]
+# assert is the point of a test; nesting `pytest.raises` inside a resource
+# context is clearer than merging them, which is what SIM117 asks for.
+"tests/**" = ["S101", "SIM117"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unreachable = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true

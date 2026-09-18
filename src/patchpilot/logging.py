@@ -54,4 +54,6 @@ def setup_logging(level: LogLevel = "INFO", *, json_output: bool = False) -> Non
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Return a logger bound to a component name."""
-    return structlog.get_logger(component=name)
+    # structlog.get_logger is untyped upstream, so mypy sees Any here.
+    logger: structlog.stdlib.BoundLogger = structlog.get_logger(component=name)
+    return logger
