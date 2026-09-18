@@ -1,0 +1,17 @@
+# Dependencies for the public demo only.
+#
+# Deliberately a subset. The Space runs the deterministic half of PatchPilot —
+# repository analysis, issue ranking, code search and the guardrail layer — so
+# it does not need langgraph, the Docker SDK, or the MCP server. Smaller image,
+# faster cold start, and less surface on a public host.
+# Pinned to a minor range, not just `<6`: the container originally resolved
+# 5.50 while local development was on 5.13, and parameters had moved between
+# them. A deployment should run the version its tests ran against.
+gradio>=5.13,<5.20
+httpx>=0.28,<0.29
+tenacity>=9.0,<10
+pydantic>=2.9,<3
+pydantic-settings>=2.6,<3
+structlog>=24.4,<26
+qdrant-client[fastembed]>=1.12,<2
+rank-bm25>=0.2,<0.3

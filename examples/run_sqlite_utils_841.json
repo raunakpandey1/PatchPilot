@@ -1,0 +1,60 @@
+{
+  "_note": "A real run, recorded verbatim from the terminal on 2026-09-18. Nothing here is illustrative or reconstructed. Model: gemini-3.8-flash at temperature 0.",
+  "run_id": "run_28bfb0fe",
+  "repository": "simonw/sqlite-utils",
+  "commit": "85b1be10",
+  "model": "gemini/gemini-3.8-flash",
+  "issue": {
+    "number": 841,
+    "title": "rows_where() and delete_where() fail to throw errors against non-existent tables (fix in v5)",
+    "url": "https://github.com/simonw/sqlite-utils/issues/841",
+    "score": 0.911,
+    "verdict": "attempt"
+  },
+  "ranking_explanation": "#841 — rows_where() and delete_where() fail to throw errors against non-existent tables (fix in v5)\n  verdict: ATTEMPT   score: 0.91\n  factors:\n    + reproducibility   3.00  2 reproduction signals (traceback/code/steps)\n    + labels            2.00  labelled bug\n    + scope             1.20  focused description\n    + discussion        0.60  1 comments — some confirmation\n    + clarity           0.50  specific title\n    + staleness         0.50  active (35 days ago)",
+  "retrieved_context": [
+    {"score": 0.860, "location": "sqlite_utils/db.py:4091-4116", "symbol": "Table.delete_where"},
+    {"score": 0.835, "location": "sqlite_utils/db.py:2140-2180", "symbol": "Queryable.rows_where"},
+    {"score": 0.832, "location": "sqlite_utils/db.py:2109-2124", "symbol": "Queryable.count_where"},
+    {"score": 0.824, "location": "sqlite_utils/db.py:2126-2128", "symbol": "Queryable.execute_count"},
+    {"score": 0.818, "location": "sqlite_utils/db.py:2343-2344", "symbol": "Table.exists"},
+    {"score": 0.817, "location": "sqlite_utils/db.py:4155-4175", "symbol": "Table.update"},
+    {"score": 0.813, "location": "docs/python-api.rst:1234-1248", "symbol": "documentation"},
+    {"score": 0.810, "location": "docs/python-api.rst:2431-2444", "symbol": "documentation"}
+  ],
+  "root_cause": {
+    "confidence": "high",
+    "summary": "Both rows_where() and delete_where() check if not self.exists() and return early instead of attempting to execute their queries against non-existent tables.",
+    "primary_file": "sqlite_utils/db.py",
+    "evidence": [
+      {"location": "sqlite_utils/db.py:2160-2161", "why": "Queryable.rows_where checks if not self.exists() and returns early, yielding nothing instead of letting SQLite raise an error.", "verified": true},
+      {"location": "sqlite_utils/db.py:4106-4107", "why": "Table.delete_where checks if not self.exists() and returns self early, suppressing any error from non-existent tables.", "verified": true},
+      {"location": "sqlite_utils/db.py:2120-2124", "why": "Queryable.count_where does not check self.exists() and directly executes SQL, which causes SQLite to raise an OperationalError on missing tables.", "verified": true}
+    ]
+  },
+  "plan": {
+    "approach": "Remove the early return check 'if not self.exists(): return' from Queryable.rows_where() and Table.delete_where() in sqlite_utils/db.py so that attempting to call them on a non-existent table correctly triggers a sqlite3.OperationalError via the database query execution.",
+    "steps": [
+      "Locate rows_where in sqlite_utils/db.py and remove the 'if not self.exists(): return' check.",
+      "Locate delete_where in sqlite_utils/db.py and remove the 'if not self.exists(): return' check."
+    ],
+    "test_strategy": "Run existing tests to ensure no regressions, and add a test verifying that calling rows_where() and delete_where() on a non-existent table raises sqlite3.OperationalError.",
+    "risks": ["Code relying on rows_where() or delete_where() silently returning empty/no-op on non-existent tables will now raise an exception."]
+  },
+  "patch": {
+    "files_changed": ["sqlite_utils/db.py"],
+    "lines_added": 0,
+    "lines_removed": 4,
+    "diff": "--- a/sqlite_utils/db.py\n+++ b/sqlite_utils/db.py\n@@ -2159,8 +2159,6 @@\n         :param limit: Integer number of rows to limit to\n         :param offset: Integer for SQL offset\n         \"\"\"\n-        if not self.exists():\n-            return\n         sql = f\"select {select} from {quote_identifier(self.name)}\"\n         if where is not None:\n             sql += \" where \" + where\n@@ -4104,8 +4102,6 @@\n           parameters, or a dictionary for ``id > :id``\n         :param analyze: Set to ``True`` to run ``ANALYZE`` after the rows have been deleted.\n         \"\"\"\n-        if not self.exists():\n-            return self\n         sql = f\"delete from {quote_identifier(self.name)}\"\n         if where is not None:\n             sql += \" where \" + where\n"
+  },
+  "cost": {
+    "model_calls": 3,
+    "total_tokens": 6625,
+    "fallback_events": 5,
+    "note": "Five fallback events in this run: three 503s on gemini-3.8-flash, one 503 on gemini-3.6-flash, one 429 quota exhaustion. Without the fallback chain the run fails."
+  },
+  "validation": {
+    "status": "not run",
+    "note": "This run stopped before sandbox validation. The patch has NOT been verified against the test suite, and is shown as an example of what the pipeline produces rather than as a confirmed fix."
+  }
+}

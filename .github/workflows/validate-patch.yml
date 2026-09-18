@@ -1,0 +1,100 @@
+# The execution plane.
+#
+# PatchPilot validates a patch by running the repository's own tests in a
+# container with no network. Free application hosting does not grant privileged
+# containers, so the public demo cannot do that — and an unvalidated patch
+# presented as a result is precisely what this project exists to avoid.
+#
+# So validation runs here instead. GitHub Actions gives a fresh VM per job, free
+# and unlimited for public repositories, which is a better sandbox than anything
+# a free PaaS offers.
+#
+# Splitting the control plane (the UI, which decides what to try) from the
+# execution plane (this, which runs untrusted code) is how you would build this
+# at any scale. Here it is also the only free way.
+
+name: Validate a proposed patch
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Target repository (owner/name)"
+        required: true
+      ref:
+        description: "Commit to patch"
+        required: true
+        default: "main"
+      patch:
+        description: "Unified diff to apply"
+        required: true
+      test_command:
+        description: "Command to run"
+        required: false
+        default: "python -m pytest -x -q"
+
+permissions:
+  contents: read        # least privilege: this job reads code and runs tests
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # a hung test suite must not hold a runner open
+
+    steps:
+      - name: Check out the target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false   # the job must not be able to push
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply the patch
+        id: apply
+        run: |
+          printf '%s\n' "${{ inputs.patch }}" > /tmp/patch.diff
+          # --check first: distinguish "the patch does not apply" from "the
+          # tests failed". They are different outcomes and the agent repairs
+          # them differently.
+          if ! git apply --check /tmp/patch.diff 2>/tmp/apply_error; then
+            echo "outcome=patch_did_not_apply" >> "$GITHUB_OUTPUT"
+            cat /tmp/apply_error
+            exit 1
+          fi
+          git apply /tmp/patch.diff
+          echo "outcome=applied" >> "$GITHUB_OUTPUT"
+
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" || pip install -e . || pip install -r requirements.txt || true
+          pip install pytest
+
+      - name: Run the tests
+        id: tests
+        run: |
+          set +e
+          ${{ inputs.test_command }} 2>&1 | tee /tmp/test_output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## Validation result"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| repository | \`${{ inputs.repository }}\` |"
+            echo "| ref | \`${{ inputs.ref }}\` |"
+            echo "| patch applied | ${{ steps.apply.outputs.outcome }} |"
+            echo "| test exit code | ${{ steps.tests.outputs.exit_code }} |"
+            echo ""
+            echo '```'
+            tail -60 /tmp/test_output.txt 2>/dev/null || echo "no test output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

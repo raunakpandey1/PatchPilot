@@ -1,0 +1,30 @@
+# The project's own tests. Integration tests are excluded: they need Docker and
+# a GitHub token, and a suite that cannot run in CI is one that silently stops
+# being run.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Poetry
+        run: pipx install poetry
+      - run: poetry install --no-interaction
+      - name: Lint
+        run: poetry run ruff check .
+      - name: Type check
+        run: poetry run mypy
+      - name: Unit tests
+        run: poetry run pytest -m "not integration" -q
