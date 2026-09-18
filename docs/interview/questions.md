@@ -360,3 +360,123 @@ failed. That located it in LangGraph's overload inference rather than in my
 types, so the four `type: ignore` comments are a documented decision with the
 reduction recorded beside them. Silencing a checker without that evidence is how
 a real bug ends up hidden behind a comment.
+
+---
+
+## RAG and retrieval
+
+**What is RAG and why does this project need it?**
+
+Retrieval-augmented generation: find the parts of your data relevant to a query
+and put them in the prompt. Needed because the model has never seen this
+repository and cannot be shown all of it — code tokenises densely, so a
+500-line file can exceed 6,000 tokens, and filling a prompt with irrelevant
+files measurably degrades answers rather than improving them. The engineering
+problem is choosing what goes in.
+
+**How do you chunk code, and why not the standard fixed-size approach?**
+
+Parse it and cut on declaration boundaries — functions, classes, methods — using
+Python's `ast`. Fixed-size chunking splits functions in half and both halves are
+worse than useless: one has the signature without the logic, so it matches
+searches it cannot answer, and the other has the logic without the name, so it
+is unfindable. The information is present and retrieval can no longer reach it.
+The standard advice is written for prose, where paragraphs are interchangeable;
+code has explicit structure telling you where the seams are.
+
+**What do you do with a class too big for one chunk?**
+
+Split it into a signature-and-docstring summary plus one chunk per method, each
+tagged with the class name. A thousand-line class would exceed the embedding
+model's 512-token limit and be silently truncated, and a query about one method
+would retrieve all of it. Bugs live in methods, so methods are the retrieval
+unit.
+
+**Why hybrid retrieval instead of vector search alone?**
+
+They fail in opposite directions. Vector search handles paraphrase — "crashes
+when the table doesn't exist" finds `raise NoTable` despite sharing no words —
+and is weak on exact identifiers, because `rows_where` embeds near "things about
+querying rows" rather than to the function of that name. BM25 is the reverse. A
+GitHub issue contains prose *and* a traceback with exact symbols, so using one
+method throws away half the query.
+
+**How do you combine two rankings whose scores are not comparable?**
+
+Reciprocal Rank Fusion. Cosine similarity is in [-1, 1]; BM25 is unbounded and
+corpus-dependent, so adding them is meaningless and normalising them requires
+knowing distributions that change per query. RRF discards the scores and sums
+1/(k + rank) with k = 60, using only positions. Nothing needs normalising, and a
+ranker producing wild scores cannot dominate — only its ordering counts.
+
+**What is the difference between pre- and post-filtering, and why does it
+matter?**
+
+Post-filtering retrieves the nearest N and then discards the ones that fail the
+filter — so if 45 of the top 50 are tests and you asked for 10 non-test results,
+you get 5, with no error. Pre-filtering narrows to matching chunks first and
+searches within them, returning the full 10. Since Recall@K is the number I
+publish, a retrieval layer that quietly returns fewer results than requested
+would make the metric wrong rather than just worse. I verified Qdrant
+pre-filters with a constructed case rather than trusting documentation.
+
+**What is the difference between a bi-encoder and a cross-encoder?**
+
+A bi-encoder encodes query and document separately into vectors, so documents
+can be embedded in advance and search is a fast index lookup — but the model
+never sees the pair together. A cross-encoder takes the pair as one input, so
+every layer can relate query tokens to document tokens; much more accurate, and
+impossible to precompute. That trade is why the pipeline retrieves ~30
+candidates cheaply and rescores them expensively.
+
+**How do you evaluate retrieval without paying for labels?**
+
+Git already recorded the answer. For each closed issue, the commit that closed
+it names the files that had to change, so every closed issue is a labelled
+example produced as a side effect of normal development. I report Recall@K,
+Precision@K and MRR across four configurations, so the comparison rather than
+any single number is the finding.
+
+**Why is recall your headline metric?**
+
+Because a file never retrieved can never be fixed — recall caps everything
+downstream. Precision still matters, since irrelevant chunks consume context and
+bury the relevant one, which is why both are reported at two values of K.
+Otherwise you could maximise recall by returning everything.
+
+**What is wrong with your benchmark?**
+
+Several things, all making it conservative. The fix commit is one valid answer,
+not the only one, so a genuinely relevant file that was not in that commit
+scores as wrong — the numbers are a lower bound. Only issues closed by an
+identifiable commit are usable, which may skew towards tidy fixes. Scoring is at
+file granularity because that is what the labels support. And it is one
+repository, so it is evidence rather than a law.
+
+**Your benchmark had a ceiling below 1.0. How did you find that?**
+
+By printing the ground truth before trusting it. The labels averaged two files
+per example and about half were test files, because a fix commit touches the
+source and its test together — while the retriever is configured to exclude
+tests. So roughly half of every example's correct answers were unreachable by
+construction, capping recall at a different level for each example. Nothing
+failed; it would have printed a plausible number. The generalisable check is
+that the labels and the system under test must agree on what a valid answer is.
+
+**What breaks first at a thousand repositories?**
+
+BM25. It is computed in-process, holding the corpus in memory and rebuilding per
+repository — milliseconds for one repository, untenable for many large ones. The
+fix is Qdrant's sparse-vector support so the inverted index lives in the
+database. Second would be indexing throughput: 1,873 chunks took 504 seconds on
+this CPU, which is fine once per repository and not fine a thousand times.
+
+**Why did you not store everything in the vector database?**
+
+Because vector search is approximate and ranked, which is right for "what looks
+similar" and wrong for "which runs did this user approve" — a question with one
+correct answer, needing transactions and foreign keys a vector store does not
+have. The clearest version is lifecycle: the index is derived data I can delete
+and rebuild, and the approval history is the record. One store makes it
+ambiguous which is which, and that ambiguity is how someone eventually deletes
+the wrong thing.

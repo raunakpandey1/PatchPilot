@@ -174,3 +174,144 @@ the ranker is deterministic ([ADR-010](adr/ADR-010-deterministic-ranking.md)).
 The unit suite exercises the full agent graph — cloning, ranking, checkpointing,
 resume — with no network, no API key and no model. That is what the fake
 provider and the injectable HTTP transport are for.
+
+---
+
+## Phase 3 — Indexing cost
+
+**Command:** `poetry run python scripts/benchmark_retrieval.py simonw/sqlite-utils`
+**When:** 2026-09-18 · M1 MacBook Air, 8 GB · BGE-small-en-v1.5 on CPU
+
+| metric | value |
+|---|---|
+| files in repository | 107 |
+| files indexed | 89 |
+| files skipped | 10 |
+| chunks created | **1,873** |
+| indexing time | **504 s** (~8.4 min) |
+| throughput | ~3.7 chunks/s |
+| embedding model | BAAI/bge-small-en-v1.5 (67 MB, 384-dim) |
+| index size on disk | ~2 MB |
+
+### What this says
+
+**Embedding is the bottleneck, not chunking or storage.** Chunking 1,873 pieces
+takes under a second; embedding them takes eight minutes on this CPU. That is
+the price of running the model locally — and the alternative is thousands of
+billed API calls per repository, which on a free tier is not an alternative.
+
+It is also a one-off. The index persists to disk, so this cost is paid once per
+repository, not once per query. Re-indexing is only needed when the code changes.
+
+**Where it would be sped up if it mattered:** a GPU (not available here), a
+smaller model (quality cost, measurable), or incremental indexing that only
+re-embeds changed files. The last is the right answer and is not built, because
+nothing yet re-indexes often enough for it to matter.
+
+## Phase 3 — Ground truth
+
+| metric | value |
+|---|---|
+| closed issues fetched | 400 |
+| commits searched for issue references | 2,000 |
+| usable labelled examples | **192** |
+| average relevant files per example | 1.0 (after excluding tests) |
+
+192 of 400 closed issues produced a usable label. The rest were closed without an
+identifiable fixing commit, fixed by a commit touching more than six files (a
+refactor — counting it would inflate recall), or fixed only in test files.
+
+An earlier version of this table said 200 examples averaging 1.96 files. That
+version was wrong in a way that mattered — see [failures.md](failures.md) F-005.
+
+---
+
+## Phase 3 — Retrieval quality
+
+**Command:** `poetry run python scripts/benchmark_retrieval.py simonw/sqlite-utils`
+plus a fusion-weight sweep · **When:** 2026-09-18
+**Setup:** 192 labelled examples, ground truth from fix commits, fixed pool of
+30 chunks deduplicated to files, file-level scoring, tests excluded from both
+labels and retrieval.
+
+### k=5 — the configuration that matters, since ~5 chunks fit a prompt
+
+| configuration | Recall@5 | Precision@5 | MRR | latency |
+|---|---:|---:|---:|---:|
+| **dense** | **0.835** | 0.187 | **0.564** | 79 ms |
+| hybrid 10:1 dense | 0.817 | 0.184 | 0.540 | 93 ms |
+| hybrid 3:1 dense | 0.799 | 0.179 | 0.503 | 94 ms |
+| dense + rerank | 0.775 | 0.173 | 0.399 | 3,621 ms |
+| hybrid 1:1 (plain RRF) | 0.757 | 0.170 | 0.443 | 93 ms |
+| hybrid 1:1 + rerank | 0.736 | 0.165 | 0.373 | 4,248 ms |
+| sparse (BM25) | 0.609 | 0.137 | 0.318 | 12 ms |
+
+### k=10
+
+| configuration | Recall@10 | Precision@10 | MRR |
+|---|---:|---:|---:|
+| hybrid 3:1 dense | 0.910 | 0.148 | 0.518 |
+| dense | 0.902 | 0.149 | 0.571 |
+| hybrid 10:1 dense | 0.899 | 0.148 | 0.550 |
+| dense + rerank | 0.899 | 0.149 | 0.413 |
+| hybrid 1:1 | 0.889 | 0.143 | 0.460 |
+| sparse (BM25) | 0.795 | 0.124 | 0.344 |
+
+### What these numbers say
+
+**Dense retrieval alone is the best configuration, and it is also the fastest.**
+That was not the design — see [ADR-012](adr/ADR-012-hybrid-retrieval.md).
+
+**The fusion-weight sweep explains why hybrid lost.** Reciprocal Rank Fusion
+weights both rankings equally, which is only right when they are comparable.
+Increasing the dense weight climbs monotonically towards dense-only:
+
+```
+hybrid 1:1    0.757
+hybrid 3:1    0.799
+hybrid 10:1   0.817
+dense only    0.835    ← the limit it converges on
+```
+
+It converges rather than peaking somewhere in the middle, which is the signature
+of one ranker contributing nothing the other lacked — on this corpus, with whole
+issue texts as queries.
+
+**Reranking made things worse at 46× the latency.** Recall 0.835 → 0.775 and MRR
+0.564 → 0.399. The likely cause is domain mismatch: `ms-marco-MiniLM` is trained
+on web-search passages, not source code.
+
+### What is *not* significant
+
+With 192 examples the standard error on a recall near 0.8 is about **0.027**.
+
+- dense (0.835) vs hybrid 10:1 (0.817) — **within noise**, not a real difference
+- dense (0.835) vs hybrid 1:1 (0.757) — ~2.9 SE, real
+- dense (0.835) vs + rerank (0.775) — ~2.2 SE, probably real; the MRR drop is
+  far outside noise
+
+**Precision is dominated by its ceiling and carries little signal here.** With
+1.14 relevant files per example and 5 results returned, the maximum achievable
+precision@5 is **0.228**. Recall and MRR are the informative metrics.
+
+### Limits of this measurement
+
+- One repository. `sqlite-utils` concentrates its changes in two files (`cli.py`
+  in 101 of 192 examples, `db.py` in 80), which may favour dense retrieval.
+- Ground truth is the fix commit, which is one valid answer rather than the only
+  one — so these are a **lower bound**.
+- Queries are whole issue texts. A different query shape (an extracted symbol
+  name, say) could plausibly reverse the BM25 result, and Phase 5 may produce
+  exactly that.
+
+### Two measurement bugs found and fixed before publishing
+
+Both produced plausible numbers rather than errors:
+
+- **F-005** — labels included test files the retriever was configured never to
+  return, capping recall below 1.0 at a different level per example.
+- **F-006** — the number of chunks fetched was derived from K, so "Recall@5"
+  meant different things in different runs. Caught only by measuring the same
+  configuration twice and getting 0.817 and 0.695.
+
+See [failures.md](failures.md).

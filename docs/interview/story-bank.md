@@ -239,6 +239,118 @@ than its sophistication.
 
 ---
 
+## S-007 — A benchmark that could never have scored 1.0
+
+*Answers:* "tell me about a time you found a bug nobody else would have found",
+"tell me about a time you questioned your own work", "tell me about measuring
+something badly".
+
+**Situation.** I built a retrieval benchmark for the RAG layer. The clever part
+was free ground truth: for every closed GitHub issue, the commit that closed it
+names exactly the files that had to change, so git had already recorded the
+correct answer and nobody had to label anything. 200 examples from one
+repository.
+
+**Task.** Run it and report Recall@5 across four retrieval strategies.
+
+**Action.** Before trusting the numbers I printed three of the labels:
+
+```
+#50: "Too many SQL variables" on large inserts
+    -> sqlite_utils/db.py, tests/test_create.py
+```
+
+Two files per example, and about half of them were **test** files — because a
+fix commit almost always touches the source and its test together.
+
+My retriever excludes test files, deliberately: the question it answers is
+"where is the bug", and bugs live in production code. So for that example the
+retriever was forbidden from ever returning `tests/test_create.py`. Maximum
+achievable recall: 0.5. Across the set the ceiling sat below 1.0 — and at a
+*different* level for every example, depending on how many of its files happened
+to be tests.
+
+The labels and the system under test disagreed about what counted as a valid
+answer. Neither was wrong alone; together they made the metric measure the
+restriction rather than the retrieval.
+
+I killed the run — it was 24 minutes in — filtered test files out of the labels,
+and added two regression tests. I kept the exclusion as a parameter rather than
+hard-coding it, so the effect of that choice can itself be measured later.
+
+**Result.** The benchmark now measures retrieval rather than a configuration
+mismatch. Investigating it also surfaced a cost problem: the run was dominated
+by cross-encoder reranking — 200 examples × 30 candidates × 2 values of K —
+and since K only slices an existing ranked list, one retrieval pass can be
+scored at every K. That halved the work.
+
+**What I took from it.** This is the failure mode that makes a benchmark
+dangerous rather than merely useless: **it produces a number**. A crash tells
+you something is wrong; a biased metric tells you 0.62 and lets you spend a week
+optimising against a ceiling you did not know existed — and every comparison
+against it inherits the bias silently.
+
+The check I now apply: the labels and the system under test have to agree on
+what a valid answer is. If the system is forbidden from producing something the
+labels call correct, you are measuring the restriction. And more simply: print
+the ground truth before running anything against it. Three examples were enough.
+
+---
+
+## S-008 — The same configuration, measured twice, gave two answers
+
+*Answers:* "tell me about a time you caught your own mistake", "tell me about a
+subtle bug", "how do you know your metrics are right?".
+
+**Situation.** My retrieval benchmark reported dense search at Recall@5 = 0.817.
+A follow-up experiment — sweeping fusion weights to understand why hybrid search
+had underperformed — reported the *identical* dense configuration at 0.695.
+
+Same code, same index, same 192 examples. A 0.12 gap, and no idea which number
+was real.
+
+**Task.** Find out which was wrong before either went into the documentation.
+
+**Action.** The only difference between the two runs was which K values I had
+asked for: `(5, 10)` in one, `(5,)` in the other. That should be irrelevant — K
+decides how many results to *score*, not how many to *fetch*.
+
+Except the code said:
+
+```python
+fetch = candidate_pool if reranker else max_k
+```
+
+Without a reranker, the number of chunks retrieved was `max(ks)`.
+
+That mattered because scoring is at **file** granularity while retrieval returns
+**chunks**, and chunks cluster heavily by file — in this repository, 101 of 192
+labelled examples point at one file and 80 at another. Fetching 5 chunks might
+yield 3 distinct files; fetching 10 might yield 6. So "Recall@5" was not
+measuring the top 5 files; it was measuring however many files happened to fall
+out of `max(ks)` chunks, which differed per run.
+
+I changed it to always retrieve a fixed pool of 30 chunks, deduplicate to files,
+then score the top K files — so every configuration sees the same pool — and
+added a regression test that injects a recording retriever and asserts the fetch
+size never depends on K.
+
+**Result.** All configurations became comparable, which is the entire purpose of
+the benchmark. Both runs now agree.
+
+**What I took from it.** This was only visible because I happened to measure the
+same configuration twice in different contexts. A single run would have printed
+0.817, looked entirely plausible, and gone into the documentation unchallenged.
+
+It was also the second measurement bug in that phase — the first being ground
+truth labels the retriever was forbidden from returning. Neither produced an
+error or a failing test; both produced numbers. That is what makes measurement
+bugs the dangerous kind. The two habits that caught them: print your labels
+before trusting them, and measure the same thing a second way before publishing
+it.
+
+---
+
 ## Stories not yet written
 
 Placeholders, so the gaps stay honest. These will be filled only if the

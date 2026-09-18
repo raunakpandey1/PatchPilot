@@ -5,7 +5,7 @@ finds an actionable issue, investigates it against the codebase, proposes a
 patch, validates that patch in a sandbox, and — only with human approval —
 opens a pull request.
 
-**Status:** Phase 2 of 13 complete. It picks an issue; it cannot yet fix one. See [the roadmap](#roadmap).
+**Status:** Phase 3 of 13 complete. It picks an issue and finds the relevant code; it cannot yet fix anything. See [the roadmap](#roadmap).
 
 ```
 GitHub repo ──► analyse ──► rank issues ──► retrieve code ──► root cause
@@ -62,6 +62,9 @@ poetry run python scripts/benchmark_github.py simonw/sqlite-utils
 
 # Run the agent: clone, analyse, rank 77 issues, pick one — with reasons
 poetry run python scripts/run_graph.py simonw/sqlite-utils
+
+# Index the repo and measure retrieval against ground truth from git history
+poetry run python scripts/benchmark_retrieval.py simonw/sqlite-utils
 ```
 
 A CLI arrives in Phase 12.
@@ -84,7 +87,13 @@ A CLI arrives in Phase 12.
 - **Issue ranking** — six weighted factors plus hard blockers, fully
   explainable, zero model tokens. [`agent/ranking.py`](src/patchpilot/agent/ranking.py)
 - **LLM abstraction** — a two-method protocol with Gemini and scripted
-  implementations, so 121 tests run offline and free. [`llm/`](src/patchpilot/llm/)
+  implementations, so the test suite runs offline and free. [`llm/`](src/patchpilot/llm/)
+- **Repository RAG** — AST-based chunking, local embeddings, Qdrant embedded,
+  hybrid dense+BM25 retrieval fused by rank, cross-encoder reranking.
+  [`rag/`](src/patchpilot/rag/)
+- **Retrieval evaluation** — ground truth derived from git history, so Recall@K
+  and MRR are measured rather than asserted.
+  [`evaluation/retrieval.py`](src/patchpilot/evaluation/retrieval.py)
 
 ## Three findings so far
 
@@ -108,7 +117,7 @@ Determinism here is what makes later retrieval improvements measurable at all �
 | 0 | Foundations | ✅ |
 | 1 | GitHub & repository analysis | ✅ |
 | 2 | LangGraph + LLM provider abstraction | ✅ |
-| 3 | Repository RAG (hybrid retrieval, Qdrant) | |
+| 3 | Repository RAG (hybrid retrieval, Qdrant) | ✅ |
 | 4 | Issue investigation & root cause | |
 | 5 | Fix planning & code generation | |
 | 6 | Docker sandbox | |
@@ -130,7 +139,9 @@ src/patchpilot/      package (src/ layout — imports resolve through the instal
 ├── tools/           adapters: github, git, workspace, http_cache
 ├── analysis/        deterministic repository characterisation
 ├── llm/             provider protocol + gemini + scripted fake
-└── agent/           state, reducers, ranking, nodes, graph
+├── agent/           state, reducers, ranking, nodes, graph
+├── rag/             chunking, embeddings, store, retrieval, reranking
+└── evaluation/      retrieval benchmark and metrics
 
 tests/unit/          121 tests, offline, ~7s
 tests/integration/   6 tests, real GitHub, marked `integration`

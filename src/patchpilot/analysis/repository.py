@@ -136,6 +136,17 @@ def _classify(files: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
 
 
 def _is_test_file(path: Path) -> bool:
+    return is_test_path(str(path))
+
+
+def is_test_path(file_path: str) -> bool:
+    """Is this path a test file?
+
+    Public because the retrieval evaluator needs the same rule. Two copies of
+    "what counts as a test" would drift, and the drift would show up as an
+    unexplainable change in a benchmark number.
+    """
+    path = Path(file_path)
     parts = {part.lower() for part in path.parts}
     if parts & {"tests", "test", "testing"}:
         return True

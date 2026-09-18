@@ -219,3 +219,143 @@ is yours, and you just found it.
 Making that claim without evidence is how a real bug gets hidden behind a
 comment. Five minutes of reduction turned a guess into a fact — and into a
 documented one.
+
+---
+
+## F-005 — The benchmark could not have scored 1.0, by construction
+
+| | |
+|---|---|
+| **Date** | 2026-09-18 |
+| **Phase** | 3 |
+| **Component** | `evaluation/retrieval.py` |
+| **Severity** | Every retrieval number would have been wrong — biased low, by a different amount per example |
+
+**Symptom.** None. Nothing failed. The benchmark ran for 24 minutes and would
+have printed a table of plausible-looking numbers.
+
+I found it by printing the ground truth before trusting it:
+
+```
+avg relevant files per example: 1.96
+  #50: "Too many SQL variables" on large inserts
+      -> sqlite_utils/db.py, tests/test_create.py
+  #77: Ability to insert data transformed by a SQL function
+      -> sqlite_utils/db.py, tests/test_conversions.py
+```
+
+Two files per example, and roughly half of them are **test files**.
+
+**Investigation.** The evaluator retrieves with `exclude_tests=True` — correctly,
+because the question retrieval answers is "where is the bug", and the bug is in
+production code.
+
+But the ground truth was built from *every* `.py` file a fix commit touched, and
+a fix commit almost always touches the source file and its test together.
+
+So for an example labelled `{sqlite_utils/db.py, tests/test_create.py}`, the
+retriever is configured never to return the second one. Maximum achievable
+recall for that example is **0.5**. Across the set, the ceiling sat somewhere
+below 1.0 — and at a *different* level for every example, depending on how many
+of its files happened to be tests.
+
+**Root cause.** The labels and the retriever disagreed about what counts as a
+valid answer. Ground truth said "these files changed"; the retriever was told
+"never return tests". Neither is wrong alone; together they made the metric
+measure something other than retrieval quality.
+
+**Fix.** `build_ground_truth(exclude_test_files=True)` — filter test files from
+the labels so they match what retrieval is permitted to return. The *size* check
+still runs on the full change, because a commit touching twelve files is a
+refactor whether or not most of them were tests.
+
+The exclusion is a parameter rather than a hard-coded assumption, so the effect
+of the choice can itself be measured later.
+
+**Verification.** Two tests: one asserting a fix commit touching
+`src/thing.py` and `tests/test_thing.py` yields only the source file, and one
+asserting the old behaviour is still reachable for comparison.
+
+**Prevention.** Print the ground truth before running anything against it. Three
+examples were enough.
+
+**Lesson.** This is the failure mode that makes benchmarks dangerous rather than
+merely useless: it produces a number. A crash tells you something is wrong. A
+biased metric tells you 0.62 and lets you spend a week optimising against a
+ceiling you did not know was there — and every comparison against it inherits
+the bias silently.
+
+The generalisable check: **the labels and the system under test must agree on
+what a valid answer is.** If the system is forbidden from producing an answer
+your labels call correct, you are measuring the restriction, not the system.
+
+A second, smaller finding came out of the same investigation. The first run took
+24 minutes, dominated by cross-encoder reranking — 200 examples × 30 candidates
+× 2 values of K = 12,000 scorings on CPU. Since K only slices an existing ranked
+list, one retrieval pass can be scored at every K, halving the work. That is
+`evaluate_at_multiple_k`.
+
+---
+
+## F-006 — Configurations were not comparable, because the fetch size depended on K
+
+| | |
+|---|---|
+| **Date** | 2026-09-18 |
+| **Phase** | 3 |
+| **Component** | `evaluation/retrieval.py` |
+| **Severity** | Cross-configuration comparisons were invalid — the thing the benchmark exists to do |
+
+**Symptom.** Two runs disagreed about the same configuration. The main benchmark
+reported dense retrieval at **Recall@5 = 0.817**. A follow-up experiment,
+sweeping fusion weights, reported the identical dense configuration at
+**0.695** on the identical data.
+
+Same code, same index, same 192 examples, a 0.12 difference. One of the two
+numbers was wrong, and I did not know which.
+
+**Investigation.** The only difference between the runs was the set of K values
+requested: the main benchmark asked for `ks=(5, 10)`, the sweep for `ks=(5,)`.
+
+That should not matter. K decides how many results to *score*, not how many to
+*fetch*. Except the code read:
+
+```python
+fetch = candidate_pool if reranker else max_k
+```
+
+Without a reranker, the number of chunks retrieved was `max(ks)` — 10 in one
+run, 5 in the other.
+
+Which matters because **scoring is at file granularity while retrieval returns
+chunks**, and several chunks routinely come from the same file. `sqlite-utils`
+is a repository where 101 of 192 labelled examples point at `cli.py` and 80 at
+`db.py`, so chunks cluster heavily. Fetching 5 chunks might yield only 2 or 3
+distinct files; fetching 10 might yield 6.
+
+So "Recall@5" was not measuring the top 5 files. It was measuring *however many
+files happened to fall out of max(ks) chunks* — a different quantity per run.
+
+**Root cause.** A hidden coupling between how many results are scored and how
+many are retrieved. Each is reasonable alone; together they made the headline
+metric depend on an unrelated parameter.
+
+**Fix.** Always retrieve a fixed candidate pool (30 chunks), deduplicate to
+files, then score the top K files. Every configuration now sees the same pool,
+so "Recall@5" means the same thing everywhere.
+
+**Verification.** A regression test injects a recording retriever and asserts
+the requested limit is the pool size regardless of the K values —
+`test_the_candidate_pool_does_not_depend_on_k`.
+
+**Prevention.** When a metric is written `Recall@K`, check what K actually
+controls in the code. Here it silently controlled two things.
+
+**Lesson.** This one was only visible because **the same configuration was
+measured twice in different contexts**. A single run would have produced 0.817,
+looked plausible, and gone into the documentation.
+
+Two separate measurement bugs in one phase — F-005 and this one — and neither
+produced an error or a failing test. Both produced *numbers*. The practice that
+caught both was refusing to believe the first result: print the labels before
+trusting them, and re-measure the same thing a second way before publishing it.
