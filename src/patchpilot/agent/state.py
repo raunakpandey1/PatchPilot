@@ -39,9 +39,11 @@ from typing import Annotated, TypedDict
 from patchpilot.agent.ranking import RankedIssue
 from patchpilot.llm.base import Usage
 from patchpilot.models import (
+    ApprovalStatus,
     FixPlan,
     Issue,
     Patch,
+    PatchReview,
     Repository,
     RepositorySnapshot,
     RootCause,
@@ -121,6 +123,11 @@ class AgentState(TypedDict, total=False):
     """What the sandbox found. `None` means it has not run; a result with
     `sandbox_error` set means it could not tell — which is never a pass."""
 
+    # --- filled by review and approval -------------------------------------
+    review: PatchReview | None
+    approval_status: ApprovalStatus
+    approval_note: str
+
     # --- accumulated across every node ------------------------------------
     usage: Annotated[Usage, accumulate_usage]
     """Total tokens and latency. Summed, not replaced."""
@@ -168,6 +175,9 @@ def initial_state(
         max_debug_attempts=max_debug_attempts,
         failure_signatures=[],
         validation=None,
+        review=None,
+        approval_status=ApprovalStatus.PENDING,
+        approval_note="",
         usage=Usage(),
         visited=[],
         errors=[],
@@ -200,6 +210,10 @@ def summarize(state: AgentState) -> str:
         parts.append(validation.summary_for_human())
     if attempts := state.get("debug_attempts"):
         parts.append(f"repair attempts: {attempts}/{state.get('max_debug_attempts', 3)}")
+    if review := state.get("review"):
+        parts.append(review.summary_for_human())
+    if (status := state.get("approval_status")) and status != ApprovalStatus.PENDING:
+        parts.append(f"approval: {status}")
     if state.get("halted"):
         parts.append(f"HALTED: {state.get('halt_reason', '')}")
     if errors := state.get("errors"):

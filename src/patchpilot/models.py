@@ -588,3 +588,52 @@ class ValidationResult(BaseModel):
             if not check.failures and check.stdout_tail:
                 parts.append(f"  output: {check.stdout_tail[-800:]}")
         return "\n".join(parts) or "checks failed with no parseable output"
+
+
+# --- Review and approval ----------------------------------------------------
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CHANGES_REQUESTED = "changes_requested"
+
+
+class PatchReview(BaseModel):
+    """Everything a human needs to decide, in one object.
+
+    Assembled by the review node and rendered on the approval screen. The point
+    is that a reviewer should never have to go and find something: if it matters
+    to the decision, it is in here.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    policy_decision: str
+    objections: tuple[str, ...] = ()
+    injection_signals: tuple[str, ...] = ()
+    risk_notes: tuple[str, ...] = ()
+
+    @property
+    def is_blocked(self) -> bool:
+        """A denial cannot be approved. Some things are not a judgement call —
+        offering a human the option to override them is how they get overridden
+        at 2am by someone who is tired."""
+        return self.policy_decision == "deny"
+
+    @property
+    def needs_human(self) -> bool:
+        return self.policy_decision != "allow"
+
+    def summary_for_human(self) -> str:
+        lines = [f"Policy: {self.policy_decision.upper()}"]
+        for label, items in (
+            ("Objections", self.objections),
+            ("Injection signals", self.injection_signals),
+            ("Risks", self.risk_notes),
+        ):
+            if items:
+                lines.append(f"{label}:")
+                lines += [f"  - {item}" for item in items]
+        return "\n".join(lines)

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from patchpilot.config import Settings
 from patchpilot.config import settings as default_settings
+from patchpilot.guardrails.policy import Policy
 from patchpilot.llm.base import LLMProvider
 from patchpilot.rag.retrieval import HybridRetriever, RetrievalMode
 from patchpilot.sandbox.docker_runner import DockerSandbox
@@ -67,3 +68,11 @@ class AgentDeps:
     # they tolerate, and failing a patch for pre-existing ones would be wrong.
     validate_lint: bool = True
     validate_types: bool = False
+
+    # The policy engine. Defaults are built in `review_patch`; injecting one
+    # lets a test tighten or loosen the rules without touching the node.
+    policy: Policy | None = None
+
+    # Bypass human approval. Only for tests and benchmarks, where no human
+    # exists and nothing is pushed. Never a production path.
+    auto_approve: bool = False

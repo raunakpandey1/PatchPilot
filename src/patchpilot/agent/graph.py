@@ -45,6 +45,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from patchpilot.agent.deps import AgentDeps
+from patchpilot.agent.nodes.approval import make_human_approval_node
 from patchpilot.agent.nodes.debugging import (
     make_record_failure_node,
     make_repair_patch_node,
@@ -64,6 +65,7 @@ from patchpilot.agent.nodes.issues import (
     make_select_issue_node,
 )
 from patchpilot.agent.nodes.repository import make_analyze_repository_node
+from patchpilot.agent.nodes.review import make_review_patch_node
 from patchpilot.agent.nodes.validation import make_validate_patch_node
 from patchpilot.agent.state import AgentState, initial_state
 from patchpilot.logging import get_logger
@@ -109,6 +111,8 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
     graph.add_node("validate_patch", make_validate_patch_node(deps))  # type: ignore[call-overload]
     graph.add_node("record_failure", make_record_failure_node(deps))  # type: ignore[call-overload]
     graph.add_node("repair_patch", make_repair_patch_node(deps))  # type: ignore[call-overload]
+    graph.add_node("review_patch", make_review_patch_node(deps))  # type: ignore[call-overload]
+    graph.add_node("human_approval", make_human_approval_node(deps))  # type: ignore[call-overload]
 
     graph.add_edge(START, "analyze_repository")
 
@@ -137,11 +141,19 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
     graph.add_conditional_edges(
         "record_failure",
         route_after_validation,
-        {"done": END, "repair": "repair_patch", "give_up": END},
+        {"done": "review_patch", "repair": "repair_patch", "give_up": END},
     )
     graph.add_conditional_edges(
         "repair_patch", continue_or_halt, {"continue": "validate_patch", "halt": END}
     )
+
+    # Review then approval. A policy denial halts inside review_patch, so a
+    # denied patch is never offered to a human — an override option is how a
+    # hard rule gets overridden by someone tired.
+    graph.add_conditional_edges(
+        "review_patch", continue_or_halt, {"continue": "human_approval", "halt": END}
+    )
+    graph.add_edge("human_approval", END)
 
     return graph.compile(checkpointer=checkpointer)
 
