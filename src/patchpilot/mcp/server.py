@@ -325,7 +325,12 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str:
 
 
 async def serve() -> None:
-    """Run the MCP server over stdio."""
+    """Run the MCP server over stdio.
+
+    The SDK's decorators are untyped, so everything inside this function is
+    opaque to mypy. Confined to one function deliberately — the handlers above
+    are ordinary typed code, and this is the only untyped seam.
+    """
     import mcp.server.stdio
     import mcp.types as types
     from mcp.server import Server
@@ -333,11 +338,11 @@ async def serve() -> None:
     server: Server = Server("patchpilot")
 
     # The MCP SDK's decorators are untyped, so mypy cannot see through them.
-    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
+    @server.list_tools()  # type: ignore[untyped-decorator]
     async def list_tools() -> list[types.Tool]:
         return [types.Tool(**schema) for schema in TOOL_SCHEMAS]
 
-    @server.call_tool()  # type: ignore[no-untyped-call,untyped-decorator]
+    @server.call_tool()  # type: ignore[untyped-decorator]
     async def handle(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
         log.info("mcp_tool_called", tool=name)
         return [types.TextContent(type="text", text=call_tool(name, arguments))]
