@@ -180,8 +180,10 @@ class GeminiProvider:
         self, contents: list[types.Content], config: types.GenerateContentConfig
     ) -> Any:
         try:
+            # `contents` is typed narrowly in the SDK stubs but a list of
+            # Content is the documented multi-turn shape and works at runtime.
             return self._client.models.generate_content(
-                model=self._model, contents=contents, config=config
+                model=self._model, contents=contents, config=config  # type: ignore[arg-type]
             )
         except genai_errors.APIError as exc:
             status = getattr(exc, "code", None) or getattr(exc, "status_code", None)

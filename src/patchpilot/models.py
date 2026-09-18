@@ -266,3 +266,88 @@ class RepositorySnapshot(Frozen):
             f"({len(self.test_files)} test files), "
             f"test command={' '.join(self.test_command) if self.test_command else 'NOT FOUND'}"
         )
+
+
+# --- Investigation ----------------------------------------------------------
+
+
+class Confidence(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class Evidence(BaseModel):
+    """A specific place in the code supporting a claim.
+
+    Not optional decoration. Without citations a root-cause analysis cannot be
+    checked — by the next node or by a human — and an unverifiable analysis is
+    indistinguishable from a confident guess.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    file_path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    why_relevant: str
+
+    @property
+    def location(self) -> str:
+        return f"{self.file_path}:{self.start_line}-{self.end_line}"
+
+
+class RootCause(BaseModel):
+    """The output of the investigation node.
+
+    A schema rather than prose because the next node consumes it. A node given a
+    validated object either works or the pipeline raised before it ran; a node
+    parsing a paragraph works most of the time and fails mysteriously the rest.
+
+    ``missing_information`` exists so "I could not determine this" is a
+    *representable* answer. Without it the model has no way to express a gap
+    except by inventing something, and a confident wrong root cause sends every
+    later step in the wrong direction.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    summary: str = Field(description="One sentence: what is actually wrong.")
+    explanation: str = Field(description="How the cited code produces the reported behaviour.")
+    primary_file: str = Field(description="The file that most likely needs to change.")
+    evidence: tuple[Evidence, ...] = ()
+    confidence: Confidence = Confidence.LOW
+    missing_information: tuple[str, ...] = Field(
+        default=(),
+        description="What was not available in the excerpts and would be needed.",
+    )
+
+    @property
+    def is_actionable(self) -> bool:
+        """Is this worth attempting a fix from?
+
+        Low confidence or no evidence means the investigation did not actually
+        find the cause. Proceeding anyway produces a patch for an imagined bug.
+        """
+        return self.confidence is not Confidence.LOW and bool(self.evidence)
+
+    @property
+    def cited_files(self) -> tuple[str, ...]:
+        seen: list[str] = []
+        for item in self.evidence:
+            if item.file_path not in seen:
+                seen.append(item.file_path)
+        return tuple(seen)
+
+    def summary_for_human(self) -> str:
+        lines = [
+            f"Root cause ({self.confidence}): {self.summary}",
+            f"  primary file: {self.primary_file}",
+        ]
+        if self.evidence:
+            lines.append("  evidence:")
+            lines += [f"    - {e.location} — {e.why_relevant}" for e in self.evidence]
+        if self.missing_information:
+            lines.append("  missing:")
+            lines += [f"    - {m}" for m in self.missing_information]
+        return "\n".join(lines)

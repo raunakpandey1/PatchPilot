@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from patchpilot.config import Settings
 from patchpilot.config import settings as default_settings
 from patchpilot.llm.base import LLMProvider
+from patchpilot.rag.retrieval import HybridRetriever, RetrievalMode
 from patchpilot.tools.git import CloneStrategy
 from patchpilot.tools.github import GitHubClient
 from patchpilot.tools.workspace import Workspace
@@ -43,3 +44,15 @@ class AgentDeps:
     # repository is slow and mostly pointless — they are sorted by recent
     # activity, so the interesting ones are at the front.
     max_issues: int = 100
+
+    # Retrieval. Optional because Phases 1-2 run without it; the investigation
+    # node halts with a clear reason rather than crashing when it is absent.
+    retriever: HybridRetriever | None = None
+
+    # Dense by default, not hybrid. That is the measured result on this corpus,
+    # not the conventional choice — see ADR-012.
+    retrieval_mode: RetrievalMode = "dense"
+
+    # Chunks put in front of the model. Kept small deliberately: more context is
+    # not better context, and every chunk costs tokens on a free tier.
+    retrieval_limit: int = 8

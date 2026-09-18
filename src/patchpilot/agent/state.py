@@ -38,7 +38,8 @@ from typing import Annotated, TypedDict
 
 from patchpilot.agent.ranking import RankedIssue
 from patchpilot.llm.base import Usage
-from patchpilot.models import Issue, Repository, RepositorySnapshot
+from patchpilot.models import Issue, Repository, RepositorySnapshot, RootCause
+from patchpilot.rag.store import ScoredChunk
 
 
 def accumulate_usage(existing: Usage, incoming: Usage) -> Usage:
@@ -77,6 +78,14 @@ class AgentState(TypedDict, total=False):
     selected_issue: Issue | None
     selection_reason: str
 
+    # --- filled by the investigation nodes ---------------------------------
+    retrieved_chunks: list[ScoredChunk]
+    """The code excerpts put in front of the model. Kept in state so a failed
+    run can be asked the diagnostic question that matters: was the right code
+    even retrieved? Without it, every failure looks like 'the model is bad'."""
+
+    root_cause: RootCause | None
+
     # --- accumulated across every node ------------------------------------
     usage: Annotated[Usage, accumulate_usage]
     """Total tokens and latency. Summed, not replaced."""
@@ -112,6 +121,8 @@ def initial_state(run_id: str, repository_full_name: str) -> AgentState:
         ranked_issues=[],
         selected_issue=None,
         selection_reason="",
+        retrieved_chunks=[],
+        root_cause=None,
         usage=Usage(),
         visited=[],
         errors=[],
@@ -131,6 +142,11 @@ def summarize(state: AgentState) -> str:
         parts.append(f"{len(ranked)} issues ranked, {actionable} actionable")
     if issue := state.get("selected_issue"):
         parts.append(f"selected #{issue.number}: {issue.title}")
+    if chunks := state.get("retrieved_chunks"):
+        files = len({c.chunk.file_path for c in chunks})
+        parts.append(f"retrieved {len(chunks)} chunks from {files} files")
+    if root_cause := state.get("root_cause"):
+        parts.append(root_cause.summary_for_human())
     if state.get("halted"):
         parts.append(f"HALTED: {state.get('halt_reason', '')}")
     if errors := state.get("errors"):

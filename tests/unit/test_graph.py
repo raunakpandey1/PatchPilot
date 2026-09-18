@@ -146,18 +146,23 @@ def test_routing_is_a_pure_function():
 # --- the happy path ---------------------------------------------------------
 
 
-def test_graph_runs_end_to_end_and_selects_an_issue(deps_factory):
+def test_graph_selects_an_issue_then_halts_without_an_index(deps_factory):
+    """The deps here have no retriever, which is a real configuration: Phases
+    1-2 run without one. The graph must reach investigation and stop with a
+    stated reason rather than crashing on a missing dependency."""
     graph = build_graph(deps_factory())
 
     final = graph.invoke(initial_state("run_1", "acme/widget"))
 
     assert final["visited"] == [
-        "analyze_repository", "discover_issues", "rank_issues", "select_issue"
+        "analyze_repository", "discover_issues", "rank_issues", "select_issue",
+        "retrieve_context",
     ]
     assert final["selected_issue"].number == 1
     assert final["snapshot"].is_testable
-    assert not final["halted"]
     assert "reproducibility" in final["selection_reason"]
+    assert final["halted"]
+    assert "indexed" in final["halt_reason"]
 
 
 def test_the_highest_ranked_issue_is_selected(deps_factory):
@@ -235,8 +240,8 @@ def test_visited_accumulates_rather_than_overwrites(deps_factory):
 
     final = graph.invoke(initial_state("run_7", "acme/widget"))
 
-    assert len(final["visited"]) == 4
-    assert len(set(final["visited"])) == 4
+    assert len(final["visited"]) == 5
+    assert len(set(final["visited"])) == 5
 
 
 def test_usage_accumulates_across_nodes():
@@ -275,7 +280,8 @@ def test_state_survives_into_the_checkpointer(deps_factory):
     assert recovered.values["run_id"] == "run_resume"
     assert recovered.values["selected_issue"].number == 1
     assert recovered.values["visited"] == [
-        "analyze_repository", "discover_issues", "rank_issues", "select_issue"
+        "analyze_repository", "discover_issues", "rank_issues", "select_issue",
+        "retrieve_context",
     ]
 
 

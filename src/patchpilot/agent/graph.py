@@ -45,6 +45,10 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from patchpilot.agent.deps import AgentDeps
+from patchpilot.agent.nodes.investigation import (
+    make_retrieve_context_node,
+    make_root_cause_node,
+)
 from patchpilot.agent.nodes.issues import (
     make_discover_issues_node,
     make_rank_issues_node,
@@ -88,6 +92,8 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
     graph.add_node("discover_issues", make_discover_issues_node(deps))  # type: ignore[call-overload]
     graph.add_node("rank_issues", make_rank_issues_node(deps))  # type: ignore[call-overload]
     graph.add_node("select_issue", make_select_issue_node(deps))  # type: ignore[call-overload]
+    graph.add_node("retrieve_context", make_retrieve_context_node(deps))  # type: ignore[call-overload]
+    graph.add_node("analyze_root_cause", make_root_cause_node(deps))  # type: ignore[call-overload]
 
     graph.add_edge(START, "analyze_repository")
 
@@ -97,13 +103,15 @@ def build_graph(deps: AgentDeps, *, checkpointer: Any | None = None) -> Any:
     for source, following in (
         ("analyze_repository", "discover_issues"),
         ("discover_issues", "rank_issues"),
+        ("select_issue", "retrieve_context"),
+        ("retrieve_context", "analyze_root_cause"),
     ):
         graph.add_conditional_edges(
             source, continue_or_halt, {"continue": following, "halt": END}
         )
 
     graph.add_edge("rank_issues", "select_issue")
-    graph.add_edge("select_issue", END)
+    graph.add_edge("analyze_root_cause", END)
 
     return graph.compile(checkpointer=checkpointer)
 
