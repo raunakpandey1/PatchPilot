@@ -4,10 +4,10 @@ What MCP actually solves
 ------------------------
 Before MCP, every AI application invented its own way to describe a tool to a
 model, and every tool provider had to write an adapter per application. N tools
-times M applications means N×M integrations.
+times M applications means NxM integrations.
 
 MCP is a wire protocol for that description: a server advertises tools with JSON
-Schema, a client discovers and calls them. N + M instead of N × M. That is the
+Schema, a client discovers and calls them. N + M instead of N x M. That is the
 whole value proposition, and it is a real one — the same argument as LSP for
 editors, which is where the design comes from.
 
@@ -44,20 +44,19 @@ from typing import Any
 
 from patchpilot.config import settings
 from patchpilot.logging import get_logger
+from patchpilot.tools.github import GitHubClient
+from patchpilot.tools.workspace import Workspace
 
 log = get_logger("mcp")
 
 
-def _workspace():  # type: ignore[no-untyped-def]
-    from patchpilot.tools.workspace import Workspace
-
+def _workspace() -> Workspace:
     return Workspace(settings.workspace_dir)
 
 
-def _github():  # type: ignore[no-untyped-def]
+def _github() -> GitHubClient:
     import subprocess
 
-    from patchpilot.tools.github import GitHubClient
     from patchpilot.tools.http_cache import FileCache
 
     token = subprocess.run(
@@ -333,11 +332,12 @@ async def serve() -> None:
 
     server: Server = Server("patchpilot")
 
-    @server.list_tools()  # type: ignore[no-untyped-call,misc]
+    # The MCP SDK's decorators are untyped, so mypy cannot see through them.
+    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def list_tools() -> list[types.Tool]:
         return [types.Tool(**schema) for schema in TOOL_SCHEMAS]
 
-    @server.call_tool()  # type: ignore[no-untyped-call,misc]
+    @server.call_tool()  # type: ignore[no-untyped-call,untyped-decorator]
     async def handle(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
         log.info("mcp_tool_called", tool=name)
         return [types.TextContent(type="text", text=call_tool(name, arguments))]
